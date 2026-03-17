@@ -4,12 +4,15 @@
  * Claude Code PreToolUse Hook — Dual-Channel Approval
  *
  * CLAUDE_SOURCE=telegram → approval via Telegram inline buttons
- * terminal mode          → prompt on /dev/tty with 5-min auto-switch to hybrid
- * hybrid/telegram mode   → approval via Telegram inline buttons
- * Safe ops               → auto-approve always
+ * hybrid mode             → approval via Telegram inline buttons
+ * terminal mode           → no decision (Claude Code's built-in prompt handles it)
+ * Safe ops                → auto-approve always
+ *
+ * In terminal mode, also sends typing/working indicators to Telegram
+ * so the user knows Claude is active even when away from the desk.
  */
 
-import { readFileSync, writeFileSync, unlinkSync, existsSync, createReadStream, createWriteStream } from "fs";
+import { readFileSync, writeFileSync, unlinkSync, existsSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { t, loadLang, getLang } from "./worker/locale.mjs";
@@ -22,7 +25,6 @@ const config = JSON.parse(readFileSync(join(__dirname, "config.json"), "utf-8"))
 const BOT_TOKEN = config.botToken;
 const CHAT_ID = config.chatId;
 const TIMEOUT_MS = parseInt(config.timeoutMs || "300000", 10);
-const TTY_TIMEOUT_MS = 5 * 60 * 1000; // 5 min before auto-switch to TG
 const MODE_FILE = "/tmp/claude-output-channel";
 const PID_FILE = "/tmp/claude-tg-worker.pid";
 const TYPING_TS_FILE = "/tmp/claude-tg-typing-ts";
@@ -185,11 +187,10 @@ async function pollTelegram(opId, signal) {
 
 // ── Telegram approval ───────────────────────────────────────────────
 
-async function requestTelegramApproval(toolName, detail, description, extraHeader) {
+async function requestTelegramApproval(toolName, detail, description) {
   const opId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   const lines = [
-    ...(extraHeader ? [extraHeader, ``] : []),
     `🔴 <b>${t("approval.dangerous_op")}</b>`,
     ``,
     `<b>${t("approval.what")}</b> ${esc(toolName)}`,
@@ -247,7 +248,7 @@ async function requestTelegramApproval(toolName, detail, description, extraHeade
 
 // ── Activity indicators for terminal mode ───────────────────────────
 
-// Send typing action (rate-limited: max once per 8s)
+// Send typing action to TG (rate-limited: max once per 8s)
 function sendTypingIndicator() {
   try {
     const now = Date.now();
@@ -264,7 +265,6 @@ function sendTypingIndicator() {
 }
 
 // One-time "started working" notification per Claude invocation
-// Tracked by PPID so each new claude process sends it once
 function sendWorkingNotification(toolName) {
   try {
     const ppid = String(process.ppid);
@@ -282,60 +282,6 @@ function sendWorkingNotification(toolName) {
       body: JSON.stringify({ chat_id: CHAT_ID, text: msg, parse_mode: "HTML", disable_notification: true }),
     }).catch(() => {});
   } catch {}
-}
-
-// ── Terminal approval with auto-switch ──────────────────────────────
-
-function requestTerminalApproval(toolName, detail, description) {
-  return new Promise((resolve) => {
-    let ttyOut, ttyIn;
-
-    try {
-      ttyOut = createWriteStream("/dev/tty");
-    } catch {
-      return resolve(null); // No tty available
-    }
-
-    const mins = Math.round(TTY_TIMEOUT_MS / 60000);
-    const lines = [
-      ``,
-      `🔴  DANGEROUS: ${toolName}`,
-      `   ${detail.slice(0, 200)}`,
-      ...(description ? [`   Why: ${description}`] : []),
-      `   [y/N] (auto → Telegram in ${mins} min): `,
-    ];
-    ttyOut.write(lines.join("\n"));
-
-    try {
-      ttyIn = createReadStream("/dev/tty");
-    } catch {
-      ttyOut.end();
-      return resolve(null);
-    }
-
-    let answered = false;
-    let data = "";
-
-    const finish = (decision) => {
-      if (answered) return;
-      answered = true;
-      try { ttyIn.destroy(); } catch {}
-      try { ttyOut.write("\n"); ttyOut.end(); } catch {}
-      resolve(decision);
-    };
-
-    ttyIn.on("data", (chunk) => {
-      data += chunk.toString();
-      if (data.includes("\n")) {
-        const answer = data.trim().toLowerCase();
-        finish(answer === "y" || answer === "yes" ? "allow" : "deny");
-      }
-    });
-
-    ttyIn.on("error", () => finish(null));
-
-    setTimeout(() => finish(null), TTY_TIMEOUT_MS);
-  });
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -363,37 +309,17 @@ async function main() {
     process.exit(0);
   }
 
+  // Terminal mode → no decision, Claude Code's built-in prompt handles it
+  if (!useTgApproval()) {
+    process.exit(0);
+  }
+
+  // Hybrid or Telegram mode → ask via TG buttons
   const detail = getDetail(toolName, toolInput);
   const description = toolInput.description || "";
+  const approved = await requestTelegramApproval(toolName, detail, description);
 
-  // Hybrid/Telegram mode → ask via TG directly
-  if (useTgApproval()) {
-    const approved = await requestTelegramApproval(toolName, detail, description);
-    process.stdout.write(makeDecision(approved, approved ? "Approved via Telegram" : "Denied via Telegram"));
-    process.exit(0);
-  }
-
-  // Terminal mode → show prompt with auto-switch after 5 min
-  const terminalDecision = await requestTerminalApproval(toolName, detail, description);
-
-  if (terminalDecision !== null) {
-    // User answered in terminal
-    process.stdout.write(makeDecision(
-      terminalDecision === "allow",
-      terminalDecision === "allow" ? "Approved via terminal" : "Denied via terminal"
-    ));
-    process.exit(0);
-  }
-
-  // Timeout — auto-switch to hybrid and forward to Telegram
-  try { writeFileSync(MODE_FILE, "hybrid"); } catch {}
-
-  const approved = await requestTelegramApproval(
-    toolName, detail, description,
-    `⚡️ <b>Auto-switched to hybrid mode</b> (no terminal response for ${Math.round(TTY_TIMEOUT_MS / 60000)} min)\n<i>/mode terminal to switch back</i>`
-  );
-
-  process.stdout.write(makeDecision(approved, approved ? "Approved via Telegram (auto-switch)" : "Denied via Telegram (auto-switch)"));
+  process.stdout.write(makeDecision(approved, approved ? "Approved via Telegram" : "Denied via Telegram"));
   process.exit(0);
 }
 
