@@ -35,7 +35,8 @@ try {
 let activeChild = null;
 export function killActiveChild() {
   if (activeChild) {
-    try { activeChild.kill(); } catch {}
+    try { process.kill(-activeChild.pid, "SIGKILL"); } catch {}
+    try { activeChild.kill("SIGKILL"); } catch {}
     activeChild = null;
     return true;
   }
@@ -66,6 +67,7 @@ function spawnClaude(prompt, onEvent, { sessionId: resumeId, cwd } = {}) {
     const child = spawn(CLAUDE_BIN, args, {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: CLAUDE_TIMEOUT,
+      detached: true,
       ...(cwd && { cwd }),
       env: { ...process.env, CLAUDE_SOURCE: "telegram", CLAUDECODE: "" },
     });

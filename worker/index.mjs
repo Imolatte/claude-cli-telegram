@@ -1104,7 +1104,11 @@ async function sendToClaude(chatId, prompt) {
   console.log(`${result.success ? "✅" : "❌"} done in ${elapsed}s exit=${result.exitCode} output=${result.output?.slice(0,200)}`);
 
   if (result.success && result.output === "(empty response)") {
-    if (streamMsgId) await tg("deleteMessage", { chat_id: chatId, message_id: streamMsgId }).catch(() => {});
+    if (streamMsgId && toolLines.length > 0) {
+      tg("editMessageText", { chat_id: chatId, message_id: streamMsgId, text: toolLines.join("\n") }).catch(() => {});
+    } else if (streamMsgId) {
+      await tg("deleteMessage", { chat_id: chatId, message_id: streamMsgId }).catch(() => {});
+    }
     return;
   }
 
