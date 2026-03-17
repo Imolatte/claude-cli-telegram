@@ -676,7 +676,6 @@ async function handleCallback(cb) {
   if (data.startsWith("sleep:")) {
     const op = data.split(":")[1];
     sleepPromptSentAt = null;
-    lastHumanActivity = Date.now();
     if (op === "yes") {
       await tg("answerCallbackQuery", { callback_query_id: cb.id, text: t("sleep.goodnight") });
       await tg("editMessageText", { chat_id: chatId, message_id: cb.message.message_id, text: t("sleep.going") });
@@ -1156,9 +1155,6 @@ async function handleMessage(msg) {
 
   // Owner-only bot
   if (chatId !== OWNER_CHAT_ID) return;
-
-  // Track human activity for auto-sleep
-  if (!msg.from?.is_bot) lastHumanActivity = Date.now();
 
   console.log(`📩 text=${(msg.text||msg.caption||"").slice(0,50)} fwd=${!!(msg.forward_origin||msg.forward_from)} hasDoc=${!!msg.document} hasPhoto=${!!msg.photo}`);
 
@@ -1899,7 +1895,6 @@ function cleanupPid() {
   try { unlinkSync(PID_FILE); } catch {}
 }
 
-let lastHumanActivity = Date.now();
 let sleepPromptSentAt = null; // when we sent the sleep question
 
 const SLEEP_IDLE_MS = 30 * 60 * 1000;    // 30 min idle → ask
@@ -1909,11 +1904,41 @@ function doSleep() {
   try { execSync("pmset sleepnow"); } catch {}
 }
 
+// Get real system idle time (keyboard/mouse/trackpad) on macOS via HIDIdleTime
+// Returns milliseconds since last input, or -1 if unavailable
+function getSystemIdleMs() {
+  try {
+    const out = execSync("ioreg -c IOHIDSystem | grep HIDIdleTime", { encoding: "utf-8", timeout: 3000 });
+    const match = out.match(/"HIDIdleTime"\s*=\s*(\d+)/);
+    if (match) return parseInt(match[1], 10) / 1_000_000; // nanoseconds → ms
+  } catch {}
+  return -1;
+}
+
 function startAutoSleepWatcher() {
+  if (getOs() !== "mac") return; // only macOS has HIDIdleTime + pmset
+
+  const INTERVAL_MS = 5 * 60 * 1000;
+  let lastTick = Date.now();
   setInterval(() => {
     const now = Date.now();
+    const elapsed = now - lastTick;
+    lastTick = now;
+
+    // If elapsed >> interval, Mac was sleeping — skip to avoid false prompt
+    if (elapsed > INTERVAL_MS * 1.5) {
+      sleepPromptSentAt = null;
+      return;
+    }
+
     // If we already sent the prompt, check if 10 min passed without response
     if (sleepPromptSentAt !== null) {
+      // If user touched keyboard/mouse since we asked — cancel silently
+      const idle = getSystemIdleMs();
+      if (idle >= 0 && idle < SLEEP_IDLE_MS) {
+        sleepPromptSentAt = null;
+        return;
+      }
       if (now - sleepPromptSentAt >= SLEEP_CONFIRM_MS) {
         sleepPromptSentAt = null;
         tg("sendMessage", { chat_id: OWNER_CHAT_ID, text: t("sleep.no_response") })
@@ -1921,21 +1946,23 @@ function startAutoSleepWatcher() {
       }
       return;
     }
-    // Check idle time
-    if (now - lastHumanActivity >= SLEEP_IDLE_MS) {
-      sleepPromptSentAt = now;
-      tg("sendMessage", {
-        chat_id: OWNER_CHAT_ID,
-        text: t("sleep.ask"),
-        reply_markup: {
-          inline_keyboard: [[
-            { text: t("sleep.yes_btn"), callback_data: "sleep:yes" },
-            { text: t("sleep.no_btn"), callback_data: "sleep:no" },
-          ]],
-        },
-      }).catch(() => { sleepPromptSentAt = null; });
-    }
-  }, 5 * 60 * 1000); // check every 5 min
+
+    // Check real system idle — keyboard, mouse, trackpad
+    const idleMs = getSystemIdleMs();
+    if (idleMs < 0 || idleMs < SLEEP_IDLE_MS) return;
+
+    sleepPromptSentAt = now;
+    tg("sendMessage", {
+      chat_id: OWNER_CHAT_ID,
+      text: t("sleep.ask"),
+      reply_markup: {
+        inline_keyboard: [[
+          { text: t("sleep.yes_btn"), callback_data: "sleep:yes" },
+          { text: t("sleep.no_btn"), callback_data: "sleep:no" },
+        ]],
+      },
+    }).catch(() => { sleepPromptSentAt = null; });
+  }, INTERVAL_MS);
 }
 
 init().then(() => {
