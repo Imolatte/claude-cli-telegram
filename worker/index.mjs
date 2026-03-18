@@ -1120,6 +1120,41 @@ async function handleCallback(cb) {
   }
 }
 
+// ── Context handoff: write .claude-context.md, start fresh session ──
+
+async function doContextHandoff(chatId, sessionKey) {
+  try {
+    const cwd = getGitCwd(chatId);
+    const contextFile = join(cwd, ".claude-context.md");
+
+    await tg("sendMessage", { chat_id: chatId, text: t("rotation.handoff_saving"), disable_notification: true });
+
+    // Ask Claude to write a structured context file before we close the session
+    await runClaude(
+      `Write a comprehensive context file to \`${contextFile}\`. Include:
+- Current goal / task being worked on
+- What has been accomplished so far (key changes, decisions made)
+- Current state of the codebase
+- What still needs to be done (next steps)
+- Any important constraints or notes
+
+Be thorough — a new Claude session will read this file to continue the work seamlessly.`,
+      () => {},
+      chatId,
+    );
+
+    clearActiveSession(chatId);
+    if (sessionKey) resetScopeTokens(sessionKey);
+
+    // Start new session that immediately reads the context file
+    await enqueue(chatId, `Read \`${contextFile}\` and continue the work from where we left off.`);
+    await tg("sendMessage", { chat_id: chatId, text: t("rotation.handoff_done", { file: contextFile }), parse_mode: "HTML", disable_notification: true });
+  } catch (err) {
+    console.error("Context handoff error:", err.message);
+    await tg("sendMessage", { chat_id: chatId, text: t("error.generic", { msg: err.message }) });
+  }
+}
+
 // ── Compress session (compact context, keep working) ────────────────
 
 async function doCompressSession(chatId, sessionKey, editMsgId = null) {
@@ -1355,22 +1390,28 @@ async function sendToClaude(chatId, prompt, meta = {}) {
     await sendMsg(chatId, result.output + tokenInfo);
   }
 
-  // Ask user what to do when token limit reached
+  // Handle token limit reached
   if (shouldRotate) {
-    console.log("🔄 Token limit reached, asking user...");
-    const { activeSessionId, activeProjectDir } = getActiveSession(chatId);
-    pendingRotations.set(chatId, { oldSessionId: activeSessionId, oldProjectDir: activeProjectDir, sessionKey });
-    await tg("sendMessage", {
-      chat_id: chatId,
-      text: t("rotation.ask", { limit: formatK(getTokenRotationLimit()) }),
-      parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [[
-          { text: t("rotation.btn_new"), callback_data: "rotation:new" },
-          { text: t("rotation.btn_compress"), callback_data: "rotation:compress" },
-        ]],
-      },
-    });
+    console.log("🔄 Token limit reached...");
+    if (isGroup) {
+      // Groups: auto context handoff — write .claude-context.md, start fresh session
+      await doContextHandoff(chatId, sessionKey);
+    } else {
+      // DM: ask user to choose
+      const { activeSessionId, activeProjectDir } = getActiveSession(chatId);
+      pendingRotations.set(chatId, { oldSessionId: activeSessionId, oldProjectDir: activeProjectDir, sessionKey });
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: t("rotation.ask", { limit: formatK(getTokenRotationLimit()) }),
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [[
+            { text: t("rotation.btn_new"), callback_data: "rotation:new" },
+            { text: t("rotation.btn_compress"), callback_data: "rotation:compress" },
+          ]],
+        },
+      });
+    }
   }
 }
 
