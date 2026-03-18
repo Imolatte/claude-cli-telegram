@@ -304,6 +304,11 @@ async function main() {
     sendWorkingNotification(toolName);
   }
 
+  // If about to sleep — write flag so bot knows the interruption is intentional
+  if (toolName === "Bash" && (toolInput.command || "").includes("pmset sleepnow")) {
+    try { writeFileSync("/tmp/claude-intentional-sleep", "1"); } catch {}
+  }
+
   if (classify(toolName, toolInput) === "safe") {
     process.stdout.write(AUTO_ALLOW);
     process.exit(0);

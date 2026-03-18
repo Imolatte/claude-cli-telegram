@@ -1121,6 +1121,13 @@ async function sendToClaude(chatId, prompt) {
   }
 
   if (!result.success) {
+    // If Mac went to sleep intentionally — suppress error, just clean up
+    try {
+      if (existsSync("/tmp/claude-intentional-sleep")) {
+        unlinkSync("/tmp/claude-intentional-sleep");
+        return;
+      }
+    } catch {}
     // Distinct error notification — stands out from normal responses
     await tg("sendMessage", {
       chat_id: chatId,
