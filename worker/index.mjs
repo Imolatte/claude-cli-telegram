@@ -23,6 +23,7 @@ import {
   getTokenRotationLimit, setTokenRotationLimit, isSetupDone, markSetupDone,
   getOs, setOs,
   getAllowedUsers, addAllowedUser, removeAllowedUser,
+  getDisplayMode, setDisplayMode,
 } from "./sessions.mjs";
 import { t, getLang, setLang, loadLang, availableLangs } from "./locale.mjs";
 
@@ -58,7 +59,7 @@ const cronJobs = []; // [{label, fireAt, timer}]
 const pendingDMText = {}; // chatId → { prompt, timer } — buffer text to combine with following forward
 
 // Per-chat queues: each chat has independent busy flag + queue
-const chatQueues = new Map(); // chatId → { busy: bool, queue: [{prompt}] }
+const chatQueues = new Map(); // chatId → { busy: bool, queue: [{prompt, meta}] }
 
 // Message aggregation: buffer messages arriving within 1.5s
 const pendingMsgBuffer = new Map(); // chatId → { texts: [], timer }
@@ -98,12 +99,12 @@ function getChatQueue(chatId) {
   return chatQueues.get(chatId);
 }
 
-async function enqueue(chatId, prompt) {
+async function enqueue(chatId, prompt, meta = {}) {
   const state = getChatQueue(chatId);
   if (!state.busy) {
     state.busy = true;
     try {
-      await sendToClaude(chatId, prompt);
+      await sendToClaude(chatId, prompt, meta);
     } catch (err) {
       console.error(`❌ sendToClaude error [${chatId}]:`, err.message, err.stack);
       tg("sendMessage", { chat_id: chatId, text: t("error.generic", { msg: err.message }) }).catch(() => {});
@@ -115,16 +116,16 @@ async function enqueue(chatId, prompt) {
   }
 
   // Already busy — queue silently (no notification spam)
-  state.queue.push({ prompt });
+  state.queue.push({ prompt, meta });
 }
 
 async function processQueue(chatId) {
   const state = getChatQueue(chatId);
   if (state.busy || state.queue.length === 0) return;
-  const { prompt } = state.queue.shift();
+  const { prompt, meta = {} } = state.queue.shift();
   state.busy = true;
   try {
-    await sendToClaude(chatId, prompt);
+    await sendToClaude(chatId, prompt, meta);
   } finally {
     state.busy = false;
     processQueue(chatId);
@@ -330,6 +331,20 @@ async function sendSetupStep1(chatId) {
 }
 
 async function sendSetupStep2(chatId) {
+  await tg("sendMessage", {
+    chat_id: chatId,
+    text: t("setup.display_prompt"),
+    parse_mode: "HTML",
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: t("setup.display_tools"), callback_data: "setup:display:tools" }],
+        [{ text: t("setup.display_thoughts"), callback_data: "setup:display:thoughts" }],
+      ],
+    },
+  });
+}
+
+async function sendSetupStep3(chatId) {
   await tg("sendMessage", {
     chat_id: chatId,
     text: t("setup.tokens_prompt"),
@@ -546,6 +561,23 @@ async function handleCallback(cb) {
     return;
   }
 
+  // ── Display mode selection ──
+  if (data.startsWith("display:")) {
+    const mode = data.split(":")[1];
+    if (mode === "tools" || mode === "thoughts") {
+      setDisplayMode(mode);
+      const label = mode === "thoughts" ? "💭 Thoughts" : "🔧 Tools";
+      await tg("answerCallbackQuery", { callback_query_id: cb.id, text: `✅ ${label}` });
+      await tg("editMessageText", {
+        chat_id: chatId,
+        message_id: cb.message.message_id,
+        text: t("cmd.display_set", { mode: label }),
+        parse_mode: "HTML",
+      });
+    }
+    return;
+  }
+
   // ── Mode selection ──
   if (data.startsWith("mode:")) {
     const mode = data.split(":")[1];
@@ -569,6 +601,20 @@ async function handleCallback(cb) {
       chat_id: chatId,
       message_id: cb.message.message_id,
       text: t("cmd.model_set", { model: esc(model) }),
+      parse_mode: "HTML",
+    });
+    return;
+  }
+
+  // ── Display mode selection ──
+  if (data.startsWith("display:")) {
+    const mode = data.split(":")[1];
+    setDisplayMode(mode);
+    await tg("answerCallbackQuery", { callback_query_id: cb.id, text: `✅ ${mode}` });
+    await tg("editMessageText", {
+      chat_id: chatId,
+      message_id: cb.message.message_id,
+      text: t("cmd.display_set", { mode: esc(mode) }),
       parse_mode: "HTML",
     });
     return;
@@ -629,6 +675,19 @@ async function handleCallback(cb) {
         parse_mode: "HTML",
       });
       await sendSetupStep2(chatId);
+      return;
+    }
+    if (step === "display") {
+      setDisplayMode(value);
+      const label = value === "tools" ? t("setup.display_tools") : t("setup.display_thoughts");
+      await tg("answerCallbackQuery", { callback_query_id: cb.id, text: `✅ ${label}` });
+      await tg("editMessageText", {
+        chat_id: chatId,
+        message_id: cb.message.message_id,
+        text: t("cmd.display_set", { mode: esc(label) }),
+        parse_mode: "HTML",
+      });
+      await sendSetupStep3(chatId);
       return;
     }
     if (step === "tokens") {
@@ -989,7 +1048,18 @@ async function handleCallback(cb) {
 
 const TOOL_UPDATE_INTERVAL = 2000; // update tool progress every 2s
 
-async function sendToClaude(chatId, prompt) {
+async function sendToClaude(chatId, prompt, meta = {}) {
+  const { isOwner = true, isGroup = false, initiatorUserId = "" } = meta;
+
+  // Write request meta for approval-hook (group approval routing)
+  try {
+    writeFileSync("/tmp/claude-request-meta.json", JSON.stringify({
+      isOwner, isGroup, initiatorUserId, groupChatId: isGroup ? chatId : null,
+    }));
+  } catch {}
+
+  const displayMode = isGroup ? "thoughts" : getDisplayMode();
+
   // Immediate typing indicator — user sees activity before Claude even starts
   tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
 
@@ -997,8 +1067,11 @@ async function sendToClaude(chatId, prompt) {
   let lastUpdateTime = 0;
   let lastActivityTime = startTime;
   let toolLines = [];
+  let thoughtsText = "";
+  let lastThoughtsUpdate = 0;
   let isWritingResponse = false;
   let streamMsgId = null;
+  let thoughtsBuffer = "";
 
   async function createOrUpdateStreamMsg(text) {
     if (!streamMsgId) {
@@ -1025,42 +1098,61 @@ async function sendToClaude(chatId, prompt) {
   }, 4000);
 
   const onEvent = (event) => {
-    // Tool result — mark success/error on last tool line
-    if (event.type === "result" && event.subtype === "tool_result") {
-      // not available in stream-json, skip
-    }
-
     if (event.type === "assistant" && event.message?.content) {
       for (const block of event.message.content) {
-        if (block.type === "tool_use") {
-          isWritingResponse = false;
-          lastActivityTime = Date.now();
-          const input = block.input || {};
-          let detail = "";
-          if (block.name === "Read") detail = input.file_path || "";
-          else if (block.name === "Bash") detail = (input.command || "").slice(0, 60);
-          else if (block.name === "Grep") detail = input.pattern || "";
-          else if (block.name === "Edit" || block.name === "Write") {
-            detail = input.file_path || "";
-            if (detail) trackRecentFile(detail, block.name);
+        if (displayMode === "thoughts") {
+          // Thoughts mode: stream text reasoning blocks, ignore tool details
+          if (block.type === "text" && block.text?.trim()) {
+            thinkingShown = true;
+            lastActivityTime = Date.now();
+            thoughtsBuffer += block.text;
+            // Keep last 900 chars to fit Telegram limits
+            if (thoughtsBuffer.length > 900) thoughtsBuffer = "…" + thoughtsBuffer.slice(-880);
+            const now = Date.now();
+            if (now - lastUpdateTime > TOOL_UPDATE_INTERVAL) {
+              createOrUpdateStreamMsg(`💭 ${thoughtsBuffer}`);
+            }
           }
-          else if (block.name === "Agent") detail = input.description || "";
-          else detail = Object.values(input).join(" ").slice(0, 40);
-
-          const toolLine = `🔧 ${block.name}${detail ? ": " + detail : ""}`;
-          toolLines.push(toolLine);
-          if (toolLines.length > 6) toolLines = toolLines.slice(-6);
-          console.log(toolLine);
-
-          const now = Date.now();
-          if (true && now - lastUpdateTime > TOOL_UPDATE_INTERVAL) {
-            createOrUpdateStreamMsg(toolLines.join("\n"));
+          // Track file edits even in thoughts mode (for recentFiles)
+          if (block.type === "tool_use") {
+            const input = block.input || {};
+            if (block.name === "Edit" || block.name === "Write") {
+              const fp = input.file_path || "";
+              if (fp) trackRecentFile(fp, block.name);
+            }
           }
-        } else if (block.type === "text" && block.text && !isWritingResponse) {
-          isWritingResponse = true;
-          lastActivityTime = Date.now();
-          if (true && toolLines.length > 0) {
-            createOrUpdateStreamMsg(`${toolLines.join("\n")}\n\n${t("status.writing")}`);
+        } else {
+          // Tools mode (default): show tool activity lines
+          if (block.type === "tool_use") {
+            isWritingResponse = false;
+            lastActivityTime = Date.now();
+            const input = block.input || {};
+            let detail = "";
+            if (block.name === "Read") detail = input.file_path || "";
+            else if (block.name === "Bash") detail = (input.command || "").slice(0, 60);
+            else if (block.name === "Grep") detail = input.pattern || "";
+            else if (block.name === "Edit" || block.name === "Write") {
+              detail = input.file_path || "";
+              if (detail) trackRecentFile(detail, block.name);
+            }
+            else if (block.name === "Agent") detail = input.description || "";
+            else detail = Object.values(input).join(" ").slice(0, 40);
+
+            const toolLine = `🔧 ${block.name}${detail ? ": " + detail : ""}`;
+            toolLines.push(toolLine);
+            if (toolLines.length > 6) toolLines = toolLines.slice(-6);
+            console.log(toolLine);
+
+            const now = Date.now();
+            if (now - lastUpdateTime > TOOL_UPDATE_INTERVAL) {
+              createOrUpdateStreamMsg(toolLines.join("\n"));
+            }
+          } else if (block.type === "text" && block.text && !isWritingResponse) {
+            isWritingResponse = true;
+            lastActivityTime = Date.now();
+            if (toolLines.length > 0) {
+              createOrUpdateStreamMsg(`${toolLines.join("\n")}\n\n${t("status.writing")}`);
+            }
           }
         }
       }
@@ -1105,16 +1197,18 @@ async function sendToClaude(chatId, prompt) {
   console.log(`${result.success ? "✅" : "❌"} done in ${elapsed}s exit=${result.exitCode} output=${result.output?.slice(0,200)}`);
 
   if (result.success && result.output === "(empty response)") {
-    if (streamMsgId && toolLines.length > 0) {
-      tg("editMessageText", { chat_id: chatId, message_id: streamMsgId, text: toolLines.join("\n") }).catch(() => {});
-    } else if (streamMsgId) {
-      await tg("deleteMessage", { chat_id: chatId, message_id: streamMsgId }).catch(() => {});
+    if (streamMsgId) {
+      if (displayMode === "tools" && toolLines.length > 0) {
+        tg("editMessageText", { chat_id: chatId, message_id: streamMsgId, text: toolLines.join("\n") }).catch(() => {});
+      } else {
+        await tg("deleteMessage", { chat_id: chatId, message_id: streamMsgId }).catch(() => {});
+      }
     }
     return;
   }
 
   if (streamMsgId) {
-    if (toolLines.length > 0) {
+    if (displayMode === "tools" && toolLines.length > 0) {
       tg("editMessageText", { chat_id: chatId, message_id: streamMsgId, text: toolLines.join("\n") }).catch(() => {});
     } else {
       await tg("deleteMessage", { chat_id: chatId, message_id: streamMsgId }).catch(() => {});
@@ -1194,6 +1288,13 @@ async function handleMessage(msg) {
     if (chatId !== OWNER_CHAT_ID) return;
   }
 
+  // Build request meta for approval-hook and display mode
+  const requestMeta = {
+    isOwner: String(msg.from?.id) === OWNER_CHAT_ID,
+    isGroup: isGroupChat(msg),
+    initiatorUserId: String(msg.from?.id || ""),
+  };
+
   console.log(`📩 text=${(msg.text||msg.caption||"").slice(0,50)} fwd=${!!(msg.forward_origin||msg.forward_from)} hasDoc=${!!msg.document} hasPhoto=${!!msg.photo}`);
 
   // Forwarded message — combine with pending text if available
@@ -1251,9 +1352,9 @@ async function handleMessage(msg) {
       clearTimeout(pendingDMText[chatId].timer);
       const userComment = pendingDMText[chatId].prompt;
       delete pendingDMText[chatId];
-      await enqueue(chatId, `${fwdBlock}\n\n${userComment}`);
+      await enqueue(chatId, `${fwdBlock}\n\n${userComment}`, requestMeta);
     } else {
-      await enqueue(chatId, fwdBlock);
+      await enqueue(chatId, fwdBlock, requestMeta);
     }
     return;
   }
@@ -1268,7 +1369,7 @@ async function handleMessage(msg) {
         await tg("sendMessage", { chat_id: chatId, text: t("error.photo_download") });
         return;
       }
-      await enqueue(chatId, t("fwd.look_at_image", { path: localPath, caption }));
+      await enqueue(chatId, t("fwd.look_at_image", { path: localPath, caption }), requestMeta);
       setTimeout(() => { try { unlinkSync(localPath); } catch {} }, 120000);
     } catch (err) {
       console.error("Photo error:", err.message);
@@ -1305,7 +1406,7 @@ async function handleMessage(msg) {
         enqueueMsg = `${t("fwd.file_at", { path: localPath, name: doc.file_name || "file" })}\n\n${caption}`.trim();
         setTimeout(() => { try { unlinkSync(localPath); } catch {} }, 300000);
       }
-      await enqueue(chatId, enqueueMsg);
+      await enqueue(chatId, enqueueMsg, requestMeta);
     } catch (err) {
       console.error("Document error:", err.message);
       await tg("sendMessage", { chat_id: chatId, text: t("error.generic", { msg: err.message }) });
@@ -1325,7 +1426,7 @@ async function handleMessage(msg) {
         return;
       }
       console.log(`🎤 → ${text}`);
-      await enqueue(chatId, text);
+      await enqueue(chatId, text, requestMeta);
     } catch (err) {
       if (recMsgId) await tg("deleteMessage", { chat_id: chatId, message_id: recMsgId });
       console.error("Voice error:", err.message);
@@ -1423,6 +1524,37 @@ async function handleMessage(msg) {
     await tg("sendMessage", { chat_id: chatId, text: t("sessions.renamed", { name: esc(name) }), parse_mode: "HTML" });
     return;
   }
+  if (text.startsWith("/display")) {
+    if (isGroupChat(msg)) {
+      await tg("sendMessage", { chat_id: chatId, text: t("cmd.display_group"), parse_mode: "HTML" });
+      return;
+    }
+    const arg = text.slice(8).trim().toLowerCase();
+    if (!arg) {
+      const current = getDisplayMode();
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: t("cmd.display_current", { mode: current }),
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [[
+            { text: `${current === "tools" ? "▶️ " : ""}🔧 Tools`, callback_data: "display:tools" },
+            { text: `${current === "thoughts" ? "▶️ " : ""}💭 Thoughts`, callback_data: "display:thoughts" },
+          ]],
+        },
+      });
+      return;
+    }
+    if (arg === "tools" || arg === "thoughts") {
+      setDisplayMode(arg);
+      const label = arg === "thoughts" ? "💭 Thoughts" : "🔧 Tools";
+      await tg("sendMessage", { chat_id: chatId, text: t("cmd.display_set", { mode: label }), parse_mode: "HTML" });
+    } else {
+      await tg("sendMessage", { chat_id: chatId, text: t("error.invalid_display") });
+    }
+    return;
+  }
+
   if (text.startsWith("/mode")) {
     const arg = text.slice(5).trim().toLowerCase();
     if (!arg) {
@@ -1446,6 +1578,37 @@ async function handleMessage(msg) {
       await tg("sendMessage", { chat_id: chatId, text: t("cmd.mode_set", { mode: esc(VALID_MODES[arg]) }), parse_mode: "HTML"});
     } else {
       await tg("sendMessage", { chat_id: chatId, text: t("error.invalid_modes") });
+    }
+    return;
+  }
+  if (text.startsWith("/display")) {
+    // Owner only, disabled in groups
+    if (isGroupChat(msg)) {
+      await tg("sendMessage", { chat_id: chatId, text: t("cmd.display_group"), parse_mode: "HTML" });
+      return;
+    }
+    if (chatId !== OWNER_CHAT_ID) return;
+    const arg = text.slice(8).trim().toLowerCase();
+    if (!arg) {
+      const current = getDisplayMode();
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: t("cmd.display_current", { mode: current }),
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [[
+            { text: `${current === "tools" ? "▶️ " : ""}🔧 Tools`, callback_data: "display:tools" },
+            { text: `${current === "thoughts" ? "▶️ " : ""}💭 Thoughts`, callback_data: "display:thoughts" },
+          ]],
+        },
+      });
+      return;
+    }
+    if (arg === "tools" || arg === "thoughts") {
+      setDisplayMode(arg);
+      await tg("sendMessage", { chat_id: chatId, text: t("cmd.display_set", { mode: arg }), parse_mode: "HTML" });
+    } else {
+      await tg("sendMessage", { chat_id: chatId, text: t("error.invalid_display") });
     }
     return;
   }
@@ -1890,9 +2053,9 @@ async function handleMessage(msg) {
   }
   const timer = setTimeout(() => {
     delete pendingDMText[chatId];
-    enqueue(chatId, finalPrompt);
+    enqueue(chatId, finalPrompt, requestMeta);
   }, 1500);
-  pendingDMText[chatId] = { prompt: finalPrompt, timer };
+  pendingDMText[chatId] = { prompt: finalPrompt, timer, meta: requestMeta };
   return;
 }
 
