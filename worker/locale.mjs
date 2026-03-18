@@ -211,6 +211,8 @@ const locales = {
     "rotation.kept_old": "📌 Old session kept.",
     "rotation.summarize": "Make a brief summary of our current work: what we're doing, key decisions made, what's in progress, what still needs to be done. No more than 500 words. Facts only.",
     "rotation.continue": "[New session, previous context]\n\n{summary}\n\nContinue working with this context.",
+    "rotation.handoff_saving": "⏳ Token limit reached — saving context to file...",
+    "rotation.handoff_done": "✅ Context saved to <code>{file}</code>. Starting fresh session.",
 
     // ── Plan mode ──
     "plan.prefix": "[PLAN MODE] Only plan, do NOT write code or create files. Describe the plan, steps, architecture. Ask if clarification needed.\n\n{prompt}",
@@ -420,6 +422,8 @@ const locales = {
     "rotation.kept_old": "📌 Старая сессия сохранена.",
     "rotation.summarize": "Сделай краткое резюме нашей текущей работы: что мы делаем, какие ключевые решения приняты, что в процессе, что ещё нужно сделать. Не более 500 слов. Только факты.",
     "rotation.continue": "[Новая сессия, контекст предыдущей]\n\n{summary}\n\nПродолжай работу с этим контекстом.",
+    "rotation.handoff_saving": "⏳ Лимит токенов — сохраняю контекст в файл...",
+    "rotation.handoff_done": "✅ Контекст сохранён в <code>{file}</code>. Стартую новую сессию.",
 
     // ── Plan mode ──
     "plan.prefix": "[PLAN MODE] Только планируй, НЕ пиши код и НЕ создавай файлы. Опиши план, шаги, архитектуру. Спроси если нужны уточнения.\n\n{prompt}",
