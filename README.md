@@ -166,7 +166,7 @@ Dangerous operations require approval via Telegram inline buttons when in hybrid
 
 ## Auto-Sleep
 
-After 30 min of system idle (no keyboard/mouse input), asks via Telegram whether to put Mac to sleep. No response for 10 min → sleeps automatically.
+After 30 min of **both** system idle (no keyboard/mouse) **and** no Telegram messages from you, the bot asks whether to put Mac to sleep. If you don't respond — the question is silently dropped, Mac stays on. Triggers only when you've been working via Telegram; ignored if you're active directly at the Mac.
 
 ## Notifications
 
