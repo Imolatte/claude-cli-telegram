@@ -1214,12 +1214,15 @@ async function sendToClaude(chatId, prompt, meta = {}) {
               createOrUpdateStreamMsg(`💭 ${thoughtsBuffer}`);
             }
           }
-          // Track file edits even in thoughts mode (for recentFiles)
+          // Track file edits and MCP sends even in thoughts mode
           if (block.type === "tool_use") {
             const input = block.input || {};
             if (block.name === "Edit" || block.name === "Write") {
               const fp = input.file_path || "";
               if (fp) trackRecentFile(fp, block.name);
+            }
+            if (block.name === "send_telegram" || block.name === "send_file_telegram") {
+              mcpSent = true;
             }
           }
         } else {
@@ -1403,6 +1406,8 @@ async function handleMessage(msg) {
     const isOwnerCmd = String(msg.from?.id) === OWNER_CHAT_ID &&
       (rawText.startsWith("/allow") || rawText.startsWith("/revoke") || rawText === "/allowed");
     if (!isOwnerCmd && !isBotMentioned(msg)) return;
+    // In groups: block all commands except the three allowed management ones
+    if (rawText.startsWith("/") && !isOwnerCmd) return;
   } else {
     // In DM: owner only
     if (chatId !== OWNER_CHAT_ID) return;
