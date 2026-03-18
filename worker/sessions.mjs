@@ -129,6 +129,18 @@ export function removeAllowedUser(userId) {
   saveState(state);
 }
 
+// ── Display mode (tools / thoughts) ─────────────────────────────────
+
+export function getDisplayMode() {
+  return getState().displayMode || "tools";
+}
+
+export function setDisplayMode(mode) {
+  const state = getState();
+  state.displayMode = mode;
+  saveState(state);
+}
+
 export function setModel(model) {
   if (!VALID_MODELS.includes(model)) return false;
   const state = getState();

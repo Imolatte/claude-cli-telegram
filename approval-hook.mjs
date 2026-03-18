@@ -29,6 +29,7 @@ const MODE_FILE = "/tmp/claude-output-channel";
 const PID_FILE = "/tmp/claude-tg-worker.pid";
 const TYPING_TS_FILE = "/tmp/claude-tg-typing-ts";
 const WORKING_NOTIFIED_FILE = "/tmp/claude-tg-working-notified";
+const REQUEST_META_FILE = "/tmp/claude-request-meta.json";
 
 // Mode: "terminal" | "hybrid" | "telegram"
 function getMode() {
@@ -312,6 +313,29 @@ async function main() {
   if (classify(toolName, toolInput) === "safe") {
     process.stdout.write(AUTO_ALLOW);
     process.exit(0);
+  }
+
+  // Group request from non-owner: deny dangerous op, notify owner in DM
+  if (classify(toolName, toolInput) === "danger") {
+    try {
+      if (existsSync(REQUEST_META_FILE)) {
+        const meta = JSON.parse(readFileSync(REQUEST_META_FILE, "utf-8"));
+        if (meta.isGroup && !meta.isOwner) {
+          // Notify owner
+          const lang = getLang();
+          const msg = lang === "ru"
+            ? `⚠️ <b>Опасная операция заблокирована</b>\n\nПользователь <code>${esc(meta.initiatorUserId)}</code> попытался выполнить:\n<b>${esc(toolName)}</b>\n<code>${esc(getDetail(toolName, toolInput).slice(0, 300))}</code>\n\n<i>Задача пропущена — только ты можешь одобрять опасные операции.</i>`
+            : `⚠️ <b>Dangerous op blocked</b>\n\nUser <code>${esc(meta.initiatorUserId)}</code> tried to run:\n<b>${esc(toolName)}</b>\n<code>${esc(getDetail(toolName, toolInput).slice(0, 300))}</code>\n\n<i>Task skipped — only you can approve dangerous operations.</i>`;
+          fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: CHAT_ID, text: msg, parse_mode: "HTML" }),
+          }).catch(() => {});
+          process.stdout.write(makeDecision(false, "Dangerous ops from group require owner approval"));
+          process.exit(0);
+        }
+      }
+    } catch {}
   }
 
   // Terminal mode → no decision, Claude Code's built-in prompt handles it
