@@ -35,7 +35,7 @@ import {
   getTokenRotationLimit, setTokenRotationLimit, isSetupDone, markSetupDone,
   getOs, setOs,
   getAllowedUsers, addAllowedUser, removeAllowedUser,
-  getDisplayMode, setDisplayMode,
+  getDisplayMode, setDisplayMode, getShowDiff, setShowDiff,
 } from "./sessions.mjs";
 import { t, getLang, setLang, loadLang, availableLangs } from "./locale.mjs";
 
@@ -349,12 +349,14 @@ async function sendSetupStep1(chatId) {
 async function sendSetupStep2(chatId) {
   await tg("sendMessage", {
     chat_id: chatId,
-    text: t("setup.display_prompt"),
+    text: "🔍 <b>Показывать мини-дифф в тулах?</b>\n\nКогда Claude редактирует файл — показывать что именно изменилось прямо в статус-сообщении.\n\n<i>Можно включить/выключить позже командой /diff</i>",
     parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: [
-        [{ text: t("setup.display_tools"), callback_data: "setup:display:tools" }],
-        [{ text: t("setup.display_thoughts"), callback_data: "setup:display:thoughts" }],
+        [
+          { text: "✅ Да", callback_data: "setup:diff:on" },
+          { text: "❌ Нет", callback_data: "setup:diff:off" },
+        ],
       ],
     },
   });
@@ -679,14 +681,14 @@ async function handleCallback(cb) {
       await sendSetupStep2(chatId);
       return;
     }
-    if (step === "display") {
-      setDisplayMode(value);
-      const label = value === "tools" ? t("setup.display_tools") : t("setup.display_thoughts");
-      await tg("answerCallbackQuery", { callback_query_id: cb.id, text: `✅ ${label}` });
+    if (step === "diff") {
+      const enabled = value === "on";
+      setShowDiff(enabled);
+      await tg("answerCallbackQuery", { callback_query_id: cb.id, text: enabled ? "✅ Дифф включён" : "❌ Дифф выключен" });
       await tg("editMessageText", {
         chat_id: chatId,
         message_id: cb.message.message_id,
-        text: t("cmd.display_set", { mode: esc(label) }),
+        text: enabled ? "✅ Мини-дифф <b>включён</b>" : "❌ Мини-дифф <b>выключен</b>",
         parse_mode: "HTML",
       });
       await sendSetupStep3(chatId);
@@ -1195,7 +1197,7 @@ async function sendToClaude(chatId, prompt, meta = {}) {
     }));
   } catch {}
 
-  const displayMode = isGroup ? "thoughts" : getDisplayMode();
+  const displayMode = "tools";
 
   // Immediate typing indicator — user sees activity before Claude even starts
   tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
@@ -1204,11 +1206,8 @@ async function sendToClaude(chatId, prompt, meta = {}) {
   let lastUpdateTime = 0;
   let lastActivityTime = startTime;
   let toolLines = [];
-  let thoughtsText = "";
-  let lastThoughtsUpdate = 0;
   let isWritingResponse = false;
   let streamMsgId = null;
-  let thoughtsBuffer = "";
   let mcpSent = false;
 
   async function createOrUpdateStreamMsg(rawText) {
@@ -1250,17 +1249,29 @@ async function sendToClaude(chatId, prompt, meta = {}) {
           }
 
           let detail = "";
+          let diffLines = [];
           if (block.name === "Read") detail = input.file_path || "";
           else if (block.name === "Bash") detail = (input.command || "").slice(0, 60);
           else if (block.name === "Grep") detail = input.pattern || "";
           else if (block.name === "Edit" || block.name === "Write") {
             detail = input.file_path || "";
             if (detail) trackRecentFile(detail, block.name);
+            if (getShowDiff()) {
+              if (block.name === "Edit" && input.old_string && input.new_string) {
+                const oldLine = input.old_string.split("\n")[0].trim().slice(0, 50);
+                const newLine = input.new_string.split("\n")[0].trim().slice(0, 50);
+                if (oldLine) diffLines.push(`  ➖ ${oldLine}`);
+                if (newLine) diffLines.push(`  ➕ ${newLine}`);
+              } else if (block.name === "Write" && input.content) {
+                const firstLine = input.content.split("\n")[0].trim().slice(0, 60);
+                if (firstLine) diffLines.push(`  ➕ ${firstLine}`);
+              }
+            }
           }
           else if (block.name === "Agent") detail = input.description || "";
           else detail = Object.values(input).join(" ").slice(0, 40);
 
-          const toolLine = `🔧 ${block.name}${detail ? ": " + detail : ""}`;
+          const toolLine = [`🔧 ${block.name}${detail ? ": " + detail : ""}`, ...diffLines].join("\n");
           toolLines.push(toolLine);
           if (toolLines.length > 6) toolLines = toolLines.slice(-6);
           console.log(toolLine);
@@ -1270,24 +1281,16 @@ async function sendToClaude(chatId, prompt, meta = {}) {
             buildAndUpdateStreamMsg();
           }
         } else if (block.type === "text" && block.text?.trim()) {
+          isWritingResponse = true;
           lastActivityTime = Date.now();
-          thoughtsBuffer += block.text;
-          if (thoughtsBuffer.length > 600) thoughtsBuffer = "…" + thoughtsBuffer.slice(-580);
-
-          const now = Date.now();
-          if (now - lastUpdateTime > TOOL_UPDATE_INTERVAL) {
-            buildAndUpdateStreamMsg();
-          }
+          if (toolLines.length > 0) buildAndUpdateStreamMsg();
         }
       }
     }
   };
 
   function buildAndUpdateStreamMsg() {
-    const parts = [];
-    if (!isGroup && toolLines.length > 0) parts.push(toolLines.join("\n"));
-    if (thoughtsBuffer) parts.push(`💭 ${thoughtsBuffer}`);
-    if (parts.length > 0) createOrUpdateStreamMsg(parts.join("\n\n"));
+    if (toolLines.length > 0) createOrUpdateStreamMsg(toolLines.join("\n"));
   }
 
   const sessionIdBeforeRun = getActiveSession(chatId).activeSessionId;
@@ -1333,10 +1336,9 @@ async function sendToClaude(chatId, prompt, meta = {}) {
   console.log(`${result.success ? "✅" : "❌"} done in ${elapsed}s exit=${result.exitCode} output=${result.output?.slice(0,200)}`);
 
   if (result.success && result.output === "(empty response)") {
-    const hadActivity = toolLines.length > 0 || thoughtsBuffer.length > 0;
+    const hadActivity = toolLines.length > 0;
     if (streamMsgId) {
-      if (streamMsgId) buildAndUpdateStreamMsg();
-      else await tg("deleteMessage", { chat_id: chatId, message_id: streamMsgId }).catch(() => {});
+      buildAndUpdateStreamMsg();
     }
     if (hadActivity) {
       await tg("sendMessage", { chat_id: chatId, text: `✅ Готово${tokenInfo}`, parse_mode: "Markdown", disable_notification: true });
@@ -1704,6 +1706,18 @@ async function handleMessage(msg) {
     } else {
       await tg("sendMessage", { chat_id: chatId, text: t("error.invalid_display") });
     }
+    return;
+  }
+
+  if (text === "/diff") {
+    const current = getShowDiff();
+    const next = !current;
+    setShowDiff(next);
+    await tg("sendMessage", {
+      chat_id: chatId,
+      text: next ? "✅ Мини-дифф <b>включён</b>" : "❌ Мини-дифф <b>выключен</b>",
+      parse_mode: "HTML",
+    });
     return;
   }
 

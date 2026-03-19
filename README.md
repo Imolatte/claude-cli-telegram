@@ -288,6 +288,20 @@ bot-system-prompt.md   System prompt appended to Claude Code
 config.json            Credentials (gitignored)
 ```
 
+## Known Issues
+
+### Silent completion — response disappears into the void
+
+**Symptom:** Bot stops showing the typing indicator, tool activity goes quiet, task clearly finished — but no message arrives in chat.
+
+**Cause:** Race condition between the streaming status message and the final response delivery. Under certain timing conditions the status message gets cleaned up before the final `sendMessage` fires, and Telegram silently drops the edit on a deleted message ID — leaving the response stranded.
+
+**Workaround:** Send `/status` or any message — Claude's session is still alive and will pick up from where it left off. The completed work is not lost.
+
+**Fix:** In progress. Likely requires decoupling the stream message lifecycle from the response delivery path.
+
+---
+
 ## Security
 
 - **Owner-only** — single `chatId`, all others silently ignored
