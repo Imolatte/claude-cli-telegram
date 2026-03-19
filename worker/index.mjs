@@ -35,7 +35,7 @@ import {
   getTokenRotationLimit, setTokenRotationLimit, isSetupDone, markSetupDone,
   getOs, setOs,
   getAllowedUsers, addAllowedUser, removeAllowedUser,
-  getDisplayMode, setDisplayMode, getShowDiff, setShowDiff,
+  getShowDiff, setShowDiff,
 } from "./sessions.mjs";
 import { t, getLang, setLang, loadLang, availableLangs } from "./locale.mjs";
 
@@ -582,22 +582,6 @@ async function handleCallback(cb) {
     return;
   }
 
-  // ── Display mode selection ──
-  if (data.startsWith("display:")) {
-    const mode = data.split(":")[1];
-    if (mode === "tools" || mode === "thoughts") {
-      setDisplayMode(mode);
-      const label = mode === "thoughts" ? "💭 Thoughts" : "🔧 Tools";
-      await tg("answerCallbackQuery", { callback_query_id: cb.id, text: `✅ ${label}` });
-      await tg("editMessageText", {
-        chat_id: chatId,
-        message_id: cb.message.message_id,
-        text: t("cmd.display_set", { mode: label }),
-        parse_mode: "HTML",
-      });
-    }
-    return;
-  }
 
   // ── Mode selection ──
   if (data.startsWith("mode:")) {
@@ -1200,7 +1184,7 @@ async function sendToClaude(chatId, prompt, meta = {}) {
     }));
   } catch {}
 
-  const displayMode = "tools";
+
 
   // Immediate typing indicator — user sees activity before Claude even starts
   tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
@@ -1686,36 +1670,7 @@ async function handleMessage(msg) {
     await tg("sendMessage", { chat_id: chatId, text: t("sessions.renamed", { name: esc(name) }), parse_mode: "HTML" });
     return;
   }
-  if (text.startsWith("/display")) {
-    if (isGroupChat(msg)) {
-      await tg("sendMessage", { chat_id: chatId, text: t("cmd.display_group"), parse_mode: "HTML" });
-      return;
-    }
-    const arg = text.slice(8).trim().toLowerCase();
-    if (!arg) {
-      const current = getDisplayMode();
-      await tg("sendMessage", {
-        chat_id: chatId,
-        text: t("cmd.display_current", { mode: current }),
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [[
-            { text: `${current === "tools" ? "▶️ " : ""}🔧 Tools`, callback_data: "display:tools" },
-            { text: `${current === "thoughts" ? "▶️ " : ""}💭 Thoughts`, callback_data: "display:thoughts" },
-          ]],
-        },
-      });
-      return;
-    }
-    if (arg === "tools" || arg === "thoughts") {
-      setDisplayMode(arg);
-      const label = arg === "thoughts" ? "💭 Thoughts" : "🔧 Tools";
-      await tg("sendMessage", { chat_id: chatId, text: t("cmd.display_set", { mode: label }), parse_mode: "HTML" });
-    } else {
-      await tg("sendMessage", { chat_id: chatId, text: t("error.invalid_display") });
-    }
-    return;
-  }
+
 
   if (text === "/codediff") {
     const current = getShowDiff();

@@ -45,9 +45,14 @@ While Claude works, the bot shows a live status message with which files and com
 ```
 🔧 Read: /src/auth.ts
 🔧 Edit: /src/auth.ts
-  ➖ import { getRegion } from...
-  ➕ import { getRegion, USDT...
 🔧 Bash: npm run build
+```
+
+With `/codediff` enabled, edits also show a diff block:
+```
+🔧 Edit: /src/auth.ts
+- import { getRegion } from './geo'
++ import { getRegion, USDT_PRICE } from './geo'
 ```
 
 Code diff lines (what changed on each edit) are optional — toggle with `/codediff` or configure during `/setup`.
@@ -155,7 +160,7 @@ Add the bot to any Telegram group. In groups:
 - Bot only responds when **@mentioned** or when **replying** to its messages
 - **Only 3 commands work** in groups: `/allow`, `/allowed`, `/revoke` (owner only). All other slash commands are ignored
 - **Dangerous operations** (git push, rm -rf, DB migrations, etc.) are automatically denied if initiated by a non-owner — the owner gets a DM notification
-- Display shows live tool activity (same as DM mode)
+- Tool activity (file reads, edits, commands) is hidden — groups see only the final response
 - **Context handoff**: when the token limit is reached, Claude automatically writes `.claude-context.md` into the current project directory (goal, progress, decisions, next steps), then starts a fresh session that reads the file — nothing is lost
 
 ## Approval System
