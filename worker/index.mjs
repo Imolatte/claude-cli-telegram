@@ -205,6 +205,7 @@ function stripSystemTags(text) {
 
 async function sendMsg(chatId, text) {
   const chunks = splitMarkdown(stripSystemTags(text));
+  let sent = 0;
   for (const chunk of chunks) {
     if (!chunk.trim()) continue;
     const res = await tg("sendMessage", {
@@ -215,7 +216,9 @@ async function sendMsg(chatId, text) {
     if (!res.ok) {
       await tg("sendMessage", { chat_id: chatId, text: chunk });
     }
+    sent++;
   }
+  return sent;
 }
 
 function esc(s) {
@@ -1215,13 +1218,13 @@ async function sendToClaude(chatId, prompt, meta = {}) {
     if (!text) return;
     try {
       if (!streamMsgId) {
-        const res = await tg("sendMessage", { chat_id: chatId, text, disable_notification: true });
+        const res = await tg("sendMessage", { chat_id: chatId, text, parse_mode: "HTML", disable_notification: true });
         streamMsgId = res?.result?.message_id || null;
         lastUpdateTime = Date.now();
         console.log(`📡 stream msg created id=${streamMsgId}`);
       } else {
         lastUpdateTime = Date.now();
-        tg("editMessageText", { chat_id: chatId, message_id: streamMsgId, text }).catch(() => {});
+        tg("editMessageText", { chat_id: chatId, message_id: streamMsgId, text, parse_mode: "HTML" }).catch(() => {});
       }
     } catch (err) {
       console.error("createOrUpdateStreamMsg error:", err?.message);
@@ -1258,20 +1261,20 @@ async function sendToClaude(chatId, prompt, meta = {}) {
             if (detail) trackRecentFile(detail, block.name);
             if (getShowDiff()) {
               if (block.name === "Edit" && input.old_string && input.new_string) {
-                const oldLine = input.old_string.split("\n")[0].trim().slice(0, 50);
-                const newLine = input.new_string.split("\n")[0].trim().slice(0, 50);
-                if (oldLine) diffLines.push(`  ➖ ${oldLine}`);
-                if (newLine) diffLines.push(`  ➕ ${newLine}`);
+                const oldLine = input.old_string.split("\n")[0].trim().slice(0, 55);
+                const newLine = input.new_string.split("\n")[0].trim().slice(0, 55);
+                const diffText = [oldLine && `- ${oldLine}`, newLine && `+ ${newLine}`].filter(Boolean).join("\n");
+                if (diffText) diffLines.push(`<pre>${esc(diffText)}</pre>`);
               } else if (block.name === "Write" && input.content) {
                 const firstLine = input.content.split("\n")[0].trim().slice(0, 60);
-                if (firstLine) diffLines.push(`  ➕ ${firstLine}`);
+                if (firstLine) diffLines.push(`<pre>${esc(`+ ${firstLine}`)}</pre>`);
               }
             }
           }
           else if (block.name === "Agent") detail = input.description || "";
           else detail = Object.values(input).join(" ").slice(0, 40);
 
-          const toolLine = [`🔧 ${block.name}${detail ? ": " + detail : ""}`, ...diffLines].join("\n");
+          const toolLine = [`🔧 ${esc(block.name)}${detail ? ": " + esc(detail) : ""}`, ...diffLines].join("\n");
           toolLines.push(toolLine);
           if (toolLines.length > 6) toolLines = toolLines.slice(-6);
           console.log(toolLine);
@@ -1290,7 +1293,8 @@ async function sendToClaude(chatId, prompt, meta = {}) {
   };
 
   function buildAndUpdateStreamMsg() {
-    if (toolLines.length > 0) createOrUpdateStreamMsg(toolLines.join("\n"));
+    if (isGroup) return;
+    if (toolLines.length > 0) createOrUpdateStreamMsg(toolLines.join("\n\n"));
   }
 
   const sessionIdBeforeRun = getActiveSession(chatId).activeSessionId;
@@ -1364,7 +1368,11 @@ async function sendToClaude(chatId, prompt, meta = {}) {
   }
 
   if (!mcpSent) {
-    await sendMsg(chatId, result.output + tokenInfo);
+    const sent = await sendMsg(chatId, result.output + tokenInfo);
+    if (sent === 0) {
+      // Output was empty after stripping — silent completion, notify user
+      await tg("sendMessage", { chat_id: chatId, text: `✅ Готово${tokenInfo}`, parse_mode: "Markdown", disable_notification: true });
+    }
   }
 
   // Handle token limit reached
@@ -1709,7 +1717,7 @@ async function handleMessage(msg) {
     return;
   }
 
-  if (text === "/diff") {
+  if (text === "/codediff") {
     const current = getShowDiff();
     const next = !current;
     setShowDiff(next);
