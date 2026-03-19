@@ -1886,6 +1886,23 @@ async function handleMessage(msg) {
   }
 
   // ── System monitor ──
+  if (text === "/battery") {
+    const info = getBatteryInfo();
+    if (!info) {
+      await tg("sendMessage", { chat_id: chatId, text: "❌ Не удалось получить данные о батарее." });
+    } else {
+      const emoji = info.status === "charging" ? "⚡️" : info.percent <= 10 ? "🪫" : info.percent <= 20 ? "🔋" : "🔋";
+      const bar = "█".repeat(Math.round(info.percent / 10)) + "░".repeat(10 - Math.round(info.percent / 10));
+      const statusText = info.status === "charging" ? "заряжается" : info.status === "charged" ? "заряжен" : `осталось ~${info.remaining}`;
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: `${emoji} <b>${info.percent}%</b>  <code>${bar}</code>\n${statusText}`,
+        parse_mode: "HTML",
+      });
+    }
+    return;
+  }
+
   if (text === "/sys") {
     const info = [];
     try { info.push("🖥 " + execSync("sysctl -n machdep.cpu.brand_string", { encoding: "utf-8" }).trim()); } catch {}
@@ -2197,6 +2214,47 @@ function getSystemIdleMs() {
   return -1;
 }
 
+// ── Battery monitoring ───────────────────────────────────────────────
+
+function getBatteryInfo() {
+  try {
+    const out = execSync("pmset -g batt", { encoding: "utf-8" });
+    const match = out.match(/(\d+)%;\s*([\w ]+);\s*([\d:]+|0:00) remaining/);
+    if (!match) return null;
+    const percent = parseInt(match[1], 10);
+    const status = match[2].trim(); // "discharging", "charging", "charged"
+    const remaining = match[3];
+    return { percent, status, remaining };
+  } catch { return null; }
+}
+
+const batteryAlertsSent = new Set(); // tracks which thresholds already notified
+
+function startBatteryWatcher() {
+  if (getOs() !== "mac") return;
+
+  setInterval(() => {
+    const info = getBatteryInfo();
+    if (!info || info.status !== "discharging") {
+      // Reset alerts when charging
+      batteryAlertsSent.clear();
+      return;
+    }
+
+    for (const threshold of [20, 10]) {
+      if (info.percent <= threshold && !batteryAlertsSent.has(threshold)) {
+        batteryAlertsSent.add(threshold);
+        const emoji = threshold <= 10 ? "🪫" : "🔋";
+        tg("sendMessage", {
+          chat_id: OWNER_CHAT_ID,
+          text: `${emoji} <b>Батарея ${info.percent}%</b> — осталось ~${info.remaining}`,
+          parse_mode: "HTML",
+        }).catch(() => {});
+      }
+    }
+  }, 2 * 60 * 1000); // check every 2 min
+}
+
 function startAutoSleepWatcher() {
   if (getOs() !== "mac") return; // only macOS has HIDIdleTime + pmset
 
@@ -2247,6 +2305,7 @@ function startAutoSleepWatcher() {
 init().then(() => {
   poll();
   startAutoSleepWatcher();
+  startBatteryWatcher();
 });
 
 process.on("SIGINT", () => { running = false; cleanupPid(); process.exit(0); });
