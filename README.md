@@ -39,16 +39,18 @@ cd worker && npm install && node index.mjs
 - **Files** → downloaded with original extension, passed to Claude
 - **Forwards** → analyzed by Claude (text before forward auto-combined)
 
-### Display Modes
+### Display
 
-Two modes for what to show while Claude works:
+While Claude works, the bot shows a live status message with which files and commands are being used:
+```
+🔧 Read: /src/auth.ts
+🔧 Edit: /src/auth.ts
+  ➖ import { getRegion } from...
+  ➕ import { getRegion, USDT...
+🔧 Bash: npm run build
+```
 
-| Mode | What you see |
-|------|--------------|
-| `tools` (default) | Which files/commands Claude is using: `🔧 Read: /src/auth.ts` |
-| `thoughts` | Claude's streaming reasoning text as it thinks |
-
-Switch with `/display`. Groups always use `thoughts` mode.
+Code diff lines (what changed on each edit) are optional — toggle with `/codediff` or configure during `/setup`.
 
 ### Session Management
 - Auto-resume sessions across messages (`--resume`)
@@ -83,9 +85,7 @@ Switch with `/display`. Groups always use `thoughts` mode.
 
 | Command | Description |
 |---------|-------------|
-| `/display` | Toggle display mode: `tools` or `thoughts` (inline buttons) |
-| `/display tools` | Switch to tools mode directly |
-| `/display thoughts` | Switch to thoughts mode directly |
+| `/codediff` | Toggle inline code diff in tool updates (off by default) |
 | `/mode` | Output mode: `terminal` / `hybrid` / `telegram` |
 | `/model` | Switch model: `sonnet` / `opus` / `haiku` |
 | `/botlang` | Bot UI language: `en` / `ru` (auto-detected on first start) |
@@ -155,7 +155,7 @@ Add the bot to any Telegram group. In groups:
 - Bot only responds when **@mentioned** or when **replying** to its messages
 - **Only 3 commands work** in groups: `/allow`, `/allowed`, `/revoke` (owner only). All other slash commands are ignored
 - **Dangerous operations** (git push, rm -rf, DB migrations, etc.) are automatically denied if initiated by a non-owner — the owner gets a DM notification
-- Display is always `thoughts` mode (group-friendly)
+- Display shows live tool activity (same as DM mode)
 - **Context handoff**: when the token limit is reached, Claude automatically writes `.claude-context.md` into the current project directory (goal, progress, decisions, next steps), then starts a fresh session that reads the file — nothing is lost
 
 ## Approval System
@@ -189,7 +189,7 @@ Bot UI supports **English** and **Russian**. Language is auto-detected from your
 On first `/start`, a 4-step wizard asks:
 1. **OS** — macOS or Linux
 2. **Output mode** — terminal / hybrid / telegram
-3. **Display mode** — tools or thoughts
+3. **Code diff** — show inline diffs in tool updates (on/off)
 4. **Token rotation limit** — when to compress context (50k / 100k / 200k / unlimited)
 
 Re-run anytime with `/setup`.
