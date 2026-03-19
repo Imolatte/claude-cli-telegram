@@ -150,11 +150,6 @@ export function removeAllowedUser(userId) {
   saveState(state);
 }
 
-// ── Display mode (always tools) ──────────────────────────────────────
-
-export function getDisplayMode() { return "tools"; }
-export function setDisplayMode(_mode) {} // no-op, kept for compat
-
 // ── Show code diff in tool lines ─────────────────────────────────────
 
 export function getShowDiff() {
