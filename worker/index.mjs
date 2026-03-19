@@ -1375,8 +1375,8 @@ async function handleMessage(msg) {
     const isOwner = String(msg.from?.id) === OWNER_CHAT_ID;
     const isOwnerCmd = isOwner &&
       (rawText.startsWith("/allow") || rawText.startsWith("/revoke") || rawText === "/allowed");
-    // Owner can write without @mention; others need to @mention the bot
-    if (!isOwner && !isBotMentioned(msg)) return;
+    // Everyone (including owner) must @mention or reply to bot in groups
+    if (!isOwnerCmd && !isBotMentioned(msg)) return;
     // In groups: block slash commands for non-owners
     if (rawText.startsWith("/") && !isOwnerCmd) return;
   } else {
