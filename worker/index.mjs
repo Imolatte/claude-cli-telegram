@@ -1296,11 +1296,19 @@ async function sendToClaude(chatId, prompt, meta = {}) {
     try {
       if (existsSync("/tmp/claude-intentional-sleep")) { unlinkSync("/tmp/claude-intentional-sleep"); return; }
     } catch {}
-    await tg("sendMessage", {
-      chat_id: chatId,
-      text: `❌ <b>Error</b> (exit ${result.exitCode})\n\n<code>${esc(result.output.slice(0, 3000))}</code>`,
-      parse_mode: "HTML",
-    });
+    if (result.exitCode === -1) {
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: `⏱ <b>Timeout</b> — Claude не ответил за 5 минут, процесс завершён.\n\nПопробуй ещё раз или <code>/new</code> для новой сессии.`,
+        parse_mode: "HTML",
+      });
+    } else {
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: `❌ <b>Error</b> (exit ${result.exitCode})\n\n<code>${esc(result.output.slice(0, 3000))}</code>`,
+        parse_mode: "HTML",
+      });
+    }
     return;
   }
 
