@@ -68,7 +68,7 @@ function makeDecision(approved, reason) {
 const DANGEROUS_COMMANDS = [
   "git push", "git reset", "git rebase", "git merge", "git checkout --",
   "git clean", "git branch -D", "git branch -d",
-  "rm -rf", "rm -r", "docker rm", "docker stop", "docker system prune",
+  "rm ", "rm -rf", "rm -r", "docker rm", "docker stop", "docker system prune",
   "npx prisma migrate deploy", "npx prisma db push", "npx prisma migrate reset",
   "drop table", "drop database", "truncate",
   "vercel --prod", "npm publish",
