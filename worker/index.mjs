@@ -69,6 +69,7 @@ let pendingSessionName = null;
 let planMode = false; // false = build (default), true = plan only
 const cronJobs = []; // [{label, fireAt, timer}]
 const pendingDMText = {}; // chatId → { prompt, timer } — buffer text to combine with following forward
+const pendingPhotos = {}; // chatId → { paths: [], caption, timer, meta } — buffer photos arriving together
 
 // Per-chat queues: each chat has independent busy flag + queue
 const chatQueues = new Map(); // chatId → { busy: bool, queue: [{prompt, meta}] }
@@ -1458,18 +1459,35 @@ async function handleMessage(msg) {
     return;
   }
 
-  // Photo
+  // Photo — buffer multiple photos (media group) into a single prompt
   if (msg.photo) {
     const photo = msg.photo[msg.photo.length - 1]; // largest size
-    const caption = msg.caption || t("fwd.describe_photo");
+    const caption = msg.caption || "";
     try {
       const localPath = await downloadTgFile(photo.file_id, ".jpg");
       if (!localPath) {
         await tg("sendMessage", { chat_id: chatId, text: t("error.photo_download") });
         return;
       }
-      await enqueue(chatId, t("fwd.look_at_image", { path: localPath, caption }), requestMeta);
-      setTimeout(() => { try { unlinkSync(localPath); } catch {} }, 120000);
+      const existing = pendingPhotos[chatId];
+      if (existing) {
+        clearTimeout(existing.timer);
+        existing.paths.push(localPath);
+        if (caption) existing.caption = caption;
+      } else {
+        pendingPhotos[chatId] = { paths: [localPath], caption, meta: requestMeta };
+      }
+      const state = pendingPhotos[chatId];
+      state.timer = setTimeout(() => {
+        const { paths, caption: cap, meta } = pendingPhotos[chatId];
+        delete pendingPhotos[chatId];
+        const imageList = paths.map(p => p).join(", ");
+        const prompt = paths.length === 1
+          ? t("fwd.look_at_image", { path: paths[0], caption: cap || t("fwd.describe_photo") })
+          : `Look at these ${paths.length} images: ${imageList}\n\n${cap || t("fwd.describe_photo")}`;
+        enqueue(chatId, prompt, meta);
+        setTimeout(() => { paths.forEach(p => { try { unlinkSync(p); } catch {} }); }, 120000);
+      }, 1500);
     } catch (err) {
       console.error("Photo error:", err.message);
       await tg("sendMessage", { chat_id: chatId, text: t("error.generic", { msg: err.message }) });
