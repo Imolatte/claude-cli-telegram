@@ -301,6 +301,9 @@ async function main() {
   const toolName = input.tool_name || "";
   const toolInput = input.tool_input || {};
 
+  // Clean up pending approval marker — if we're here, previous approval was answered
+  try { unlinkSync("/tmp/claude-tg-pending-approval"); } catch {}
+
   // For terminal Claude: send activity indicators to TG so user knows work is happening
   if (process.env.CLAUDE_SOURCE !== "telegram") {
     sendTypingIndicator();

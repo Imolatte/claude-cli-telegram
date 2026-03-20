@@ -5,9 +5,12 @@
  * Fires when Claude finishes a turn (only for terminal sessions, not bot).
  */
 
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
+
+// Clean up pending approval marker — session is done
+try { unlinkSync("/tmp/claude-tg-pending-approval"); } catch {}
 
 // Skip if this is a bot-initiated session (bot handles its own messaging)
 if (process.env.CLAUDE_SOURCE === "telegram") process.exit(0);
