@@ -15,13 +15,13 @@ Send a message from Telegram → bot spawns real Claude Code CLI → streams pro
 You (Telegram) → Bot (Node.js) → Claude Code CLI → tools → response → You
 ```
 
-<details>
-<summary><b>📸 Screenshots</b> (click to expand)</summary>
+| Voice input + streaming | Approval buttons | Full approval flow |
+|---|---|---|
+| ![Voice and tools](assets/demo-voice-tools.jpg) | ![Approval](assets/demo-approval.jpg) | ![Approved](assets/demo-approved-deleted.jpg) |
 
-<!-- TODO: Add screenshots here -->
-<!-- Recommended: session management, tool progress streaming, approval buttons, git panel -->
-
-</details>
+| /status | /sessions |
+|---|---|
+| ![Status](assets/demo-status.jpg) | ![Sessions](assets/demo-sessions.jpg) |
 
 ## Why This Exists
 
@@ -83,7 +83,7 @@ Token usage shown after each response: `↓3.2k ↑17k · 4.5s · ████�
 - `/sessions` — inline keyboard to switch/delete
 - `/new [name]` — start fresh; `/name <title>` — rename
 - `/detach` — disconnect; `/cd <path>` — change working directory
-- Auto-rotation at configurable token limit (summarizes context, starts fresh)
+- Token usage tracking with warning at 190k (auto-compaction by Claude Code CLI)
 
 ### Approval System
 Dangerous operations require your approval via Telegram inline buttons:
@@ -197,7 +197,6 @@ Edit `config.json`:
   "groqApiKey": "YOUR_GROQ_API_KEY",
   "timeoutMs": 300000,
   "claudeTimeoutMs": 1800000,
-  "tokenRotationLimit": 100000
 }
 ```
 
@@ -208,7 +207,6 @@ Edit `config.json`:
 | `groqApiKey` | Groq API key for voice STT | required |
 | `timeoutMs` | Approval request timeout (ms) | 300000 (5 min) |
 | `claudeTimeoutMs` | Max time for a single Claude task (ms) | 1800000 (30 min) |
-| `tokenRotationLimit` | Token threshold for session rotation (0 = off) | 100000 |
 
 **Get your `chatId`:** send any message to your bot, then open `https://api.telegram.org/bot<TOKEN>/getUpdates` — find `chat.id`.
 

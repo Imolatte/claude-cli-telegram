@@ -210,6 +210,9 @@ const locales = {
     "rotation.handoff_saving": "⏳ Token limit reached — saving context to file...",
     "rotation.handoff_done": "✅ Context saved to <code>{file}</code>. Starting fresh session.",
 
+    // ── Token warning ──
+    "tokens.warn_limit": "⚠️ <b>Context is nearly full</b> ({used}/200k)\n\nClaude will auto-compress soon. Consider <code>/new</code> for a fresh session if quality drops.",
+
     // ── Plan mode ──
     "plan.prefix": "[PLAN MODE] Only plan, do NOT write code or create files. Describe the plan, steps, architecture. Ask if clarification needed.\n\n{prompt}",
 
@@ -218,14 +221,14 @@ const locales = {
     "status.no_session": "none",
 
     // ── Setup wizard ──
-    "setup.os_prompt": "⚙️ <b>Step 1/4 — Operating system</b>\n\nWhat OS is this machine running?",
+    "setup.os_prompt": "⚙️ <b>Step 1/3 — Operating system</b>\n\nWhat OS is this machine running?",
     "setup.os_mac": "🍎 macOS",
     "setup.os_linux": "🐧 Linux",
-    "setup.mode_prompt": "⚙️ <b>Step 2/4 — Output mode</b>\n\nWhere should Claude send responses?",
+    "setup.mode_prompt": "⚙️ <b>Step 2/3 — Output mode</b>\n\nWhere should Claude send responses?",
     "setup.mode_terminal": "🖥 Terminal — responses in terminal (you're at your Mac)",
     "setup.mode_hybrid": "🔀 Hybrid — responses in terminal, approvals on phone",
     "setup.mode_telegram": "📱 Telegram — everything on your phone",
-    "setup.diff_prompt": "⚙️ <b>Step 3/4 — Code diff</b>\n\nWhen Claude edits a file, show what changed in the status message?\n\n<i>Toggle anytime with /codediff</i>",
+    "setup.diff_prompt": "⚙️ <b>Step 3/3 — Code diff</b>\n\nWhen Claude edits a file, show what changed in the status message?\n\n<i>Toggle anytime with /codediff</i>",
     "setup.diff_on": "✅ Yes",
     "setup.diff_off": "❌ No",
     "setup.tokens_prompt": "⚙️ <b>Step 4/4 — Token rotation limit</b>\n\nWhen to compress context and start a fresh session?\n\n<i>Higher = more context, higher cost per session.</i>",
@@ -417,6 +420,9 @@ const locales = {
     "rotation.handoff_saving": "⏳ Лимит токенов — сохраняю контекст в файл...",
     "rotation.handoff_done": "✅ Контекст сохранён в <code>{file}</code>. Стартую новую сессию.",
 
+    // ── Token warning ──
+    "tokens.warn_limit": "⚠️ <b>Контекст почти заполнен</b> ({used}/200k)\n\nClaude скоро автоматически сожмёт контекст. Если качество упадёт — <code>/new</code> для чистой сессии.",
+
     // ── Plan mode ──
     "plan.prefix": "[PLAN MODE] Только планируй, НЕ пиши код и НЕ создавай файлы. Опиши план, шаги, архитектуру. Спроси если нужны уточнения.\n\n{prompt}",
 
@@ -425,14 +431,14 @@ const locales = {
     "status.no_session": "нет",
 
     // ── Setup wizard ──
-    "setup.os_prompt": "⚙️ <b>Шаг 1/4 — Операционная система</b>\n\nКакая ОС на этой машине?",
+    "setup.os_prompt": "⚙️ <b>Шаг 1/3 — Операционная система</b>\n\nКакая ОС на этой машине?",
     "setup.os_mac": "🍎 macOS",
     "setup.os_linux": "🐧 Linux",
-    "setup.mode_prompt": "⚙️ <b>Шаг 2/4 — Режим вывода</b>\n\nКуда Claude должен отправлять ответы?",
+    "setup.mode_prompt": "⚙️ <b>Шаг 2/3 — Режим вывода</b>\n\nКуда Claude должен отправлять ответы?",
     "setup.mode_terminal": "🖥 Terminal — ответы в терминале (ты за маком)",
     "setup.mode_hybrid": "🔀 Hybrid — ответы в терминале, апрувы на телефоне",
     "setup.mode_telegram": "📱 Telegram — всё на телефоне",
-    "setup.diff_prompt": "⚙️ <b>Шаг 3/4 — Code diff</b>\n\nКогда Claude редактирует файл — показывать что именно изменилось в статус-сообщении?\n\n<i>Можно включить/выключить в любой момент через /codediff</i>",
+    "setup.diff_prompt": "⚙️ <b>Шаг 3/3 — Code diff</b>\n\nКогда Claude редактирует файл — показывать что именно изменилось в статус-сообщении?\n\n<i>Можно включить/выключить в любой момент через /codediff</i>",
     "setup.diff_on": "✅ Да",
     "setup.diff_off": "❌ Нет",
     "setup.tokens_prompt": "⚙️ <b>Шаг 4/4 — Лимит токенов</b>\n\nПри каком количестве токенов сжимать контекст и начинать новую сессию?\n\n<i>Больше = больше контекста, выше стоимость сессии.</i>",

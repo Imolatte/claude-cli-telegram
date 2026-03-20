@@ -652,18 +652,9 @@ async function handleCallback(cb) {
         text: t("cmd.mode_set", { mode: esc(label) }),
         parse_mode: "HTML",
       });
-      await sendSetupStep3(chatId);
-      return;
-    }
-    if (step === "tokens") {
-      const limit = parseInt(value, 10);
-      setTokenRotationLimit(limit); // 0 = no rotation
       markSetupDone();
-      const limitLabel = limit === 0 ? t("setup.tokens_unlimited") : `${Math.round(limit / 1000)}k`;
-      await tg("answerCallbackQuery", { callback_query_id: cb.id, text: `✅ ${limitLabel}` });
-      await tg("editMessageText", {
+      await tg("sendMessage", {
         chat_id: chatId,
-        message_id: cb.message.message_id,
         text: t("setup.done"),
         parse_mode: "HTML",
       });
@@ -1267,16 +1258,17 @@ async function sendToClaude(chatId, prompt, meta = {}) {
   // Track tokens
   const sessionKey = result.sessionId || null;
   let tokenInfo = "";
-  let shouldRotate = false;
+  let shouldWarnTokens = false;
   if (result.usage) {
     const inp = result.usage.input_tokens || 0;
     const out = result.usage.output_tokens || 0;
     addTokens(inp, out, sessionKey);
     const scopeTotal = getScopeTokens(sessionKey);
-    const rotLimit = getTokenRotationLimit();
-    const bar = rotLimit > 0 ? tokenProgressBar(scopeTotal, rotLimit) : `${formatK(scopeTotal)}`;
+    const CONTEXT_LIMIT = 200_000;
+    const WARN_THRESHOLD = 190_000;
+    const bar = tokenProgressBar(scopeTotal, CONTEXT_LIMIT);
     tokenInfo = `\n\n_↓${formatK(inp)} ↑${formatK(out)} · ${elapsed}s · ${bar}_`;
-    if (rotLimit > 0 && scopeTotal >= rotLimit) shouldRotate = true;
+    if (scopeTotal >= WARN_THRESHOLD && scopeTotal - (inp + out) < WARN_THRESHOLD) shouldWarnTokens = true;
   } else {
     tokenInfo = `\n\n_${elapsed}s_`;
   }
@@ -1319,28 +1311,16 @@ async function sendToClaude(chatId, prompt, meta = {}) {
     }
   }
 
-  // Handle token limit reached
-  if (shouldRotate) {
-    console.log("🔄 Token limit reached...");
-    if (isGroup) {
-      // Groups: auto context handoff — write .claude-context.md, start fresh session
-      await doContextHandoff(chatId, sessionKey);
-    } else {
-      // DM: ask user to choose
-      const { activeSessionId, activeProjectDir } = getActiveSession(chatId);
-      pendingRotations.set(chatId, { oldSessionId: activeSessionId, oldProjectDir: activeProjectDir, sessionKey });
-      await tg("sendMessage", {
-        chat_id: chatId,
-        text: t("rotation.ask", { limit: formatK(getTokenRotationLimit()) }),
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [[
-            { text: t("rotation.btn_new"), callback_data: "rotation:new" },
-            { text: t("rotation.btn_compress"), callback_data: "rotation:compress" },
-          ]],
-        },
-      });
-    }
+  // Warn when approaching context limit (190k+ out of 200k)
+  if (shouldWarnTokens) {
+    const scopeTotal = getScopeTokens(sessionKey);
+    console.log(`⚠️ Token warning: ${formatK(scopeTotal)}/200k`);
+    await tg("sendMessage", {
+      chat_id: chatId,
+      text: t("tokens.warn_limit", { used: formatK(scopeTotal) }),
+      parse_mode: "HTML",
+      disable_notification: false,
+    });
   }
 }
 
@@ -1686,8 +1666,8 @@ async function handleMessage(msg) {
     const cwd = getCustomCwd() || activeCwd || HOME;
     const mode = getOutputMode();
     const model = getModel();
-    const rotLimit = getTokenRotationLimit();
-    const bar = rotLimit > 0 ? tokenProgressBar(scopeTotal, rotLimit) : `${formatK(scopeTotal)} (∞)`;
+    const CONTEXT_LIMIT = 200_000;
+    const bar = tokenProgressBar(scopeTotal, CONTEXT_LIMIT);
     await tg("sendMessage", {
       chat_id: chatId,
       text: t("status.cmd", {
