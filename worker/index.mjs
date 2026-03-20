@@ -6,7 +6,7 @@
  */
 
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync, existsSync } from "fs";
-import { execSync, execFile } from "child_process";
+import { execSync, execFile, execFileSync } from "child_process";
 import { join, dirname, extname } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
@@ -460,6 +460,15 @@ function getGitCwd(chatId = "default") {
 function gitExec(cmd, cwd) {
   try {
     return execSync(cmd, { cwd, encoding: "utf-8", timeout: 15000, maxBuffer: 50 * 1024 }).trim();
+  } catch (err) {
+    return err.stderr?.trim() || err.message;
+  }
+}
+
+// Safe version — args passed as array, no shell interpolation
+function gitExecSafe(args, cwd) {
+  try {
+    return execFileSync("git", args, { cwd, encoding: "utf-8", timeout: 15000, maxBuffer: 50 * 1024 }).trim();
   } catch (err) {
     return err.stderr?.trim() || err.message;
   }
@@ -968,9 +977,19 @@ async function handleCallback(cb) {
     return;
   }
 
-  // /recent file download button
+  // /recent file download button — owner only, path must be under HOME
   if (data.startsWith("dl:")) {
+    if (String(cb.from?.id) !== OWNER_CHAT_ID) {
+      await tg("answerCallbackQuery", { callback_query_id: cb.id, text: "⛔️" });
+      return;
+    }
     const filePath = data.slice(3);
+    // Prevent path traversal — only allow files under HOME
+    const resolvedPath = join("/", filePath); // normalize
+    if (!resolvedPath.startsWith(HOME + "/") && !resolvedPath.startsWith(HOME)) {
+      await tg("answerCallbackQuery", { callback_query_id: cb.id, text: "⛔️ Invalid path" });
+      return;
+    }
     await tg("answerCallbackQuery", { callback_query_id: cb.id, text: "📥" });
     if (!existsSync(filePath)) {
       await tg("sendMessage", { chat_id: chatId, text: t("error.file_not_found", { path: filePath }) });
@@ -1803,20 +1822,13 @@ async function handleMessage(msg) {
     try {
       const screenshotPath = join(TMP_DIR, `screenshot-${Date.now()}.png`);
       // Use puppeteer via npx or installed
-      execSync(
-        `node -e "
-          const puppeteer = require('puppeteer');
-          (async () => {
-            const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox'] });
-            const page = await browser.newPage();
-            await page.setViewport({ width: 1280, height: 800 });
-            await page.goto('${url.replace(/'/g, "\\'")}', { waitUntil: 'networkidle2', timeout: 15000 });
-            await page.screenshot({ path: '${screenshotPath}', fullPage: false });
-            await browser.close();
-          })();
-        "`,
-        { timeout: 30000, cwd: __dirname }
-      );
+      // Pass URL and path as process args via execFile — no shell, no injection risk
+      await new Promise((res, rej) => execFile(
+        process.execPath,
+        [join(__dirname, "screenshot.mjs"), url, screenshotPath],
+        { timeout: 30000, cwd: __dirname },
+        (err) => err ? rej(err) : res()
+      ));
       // Send photo to Telegram
       const form = new FormData();
       form.append("chat_id", chatId);
@@ -1873,13 +1885,17 @@ async function handleMessage(msg) {
         await tg("sendMessage", { chat_id: chatId, text: t("error.not_git", { cwd: esc(cwd) }), parse_mode: "HTML" });
         return;
       }
-      const out = gitExec(`git ${arg}`, cwd);
+      const out = gitExecSafe(arg.split(/\s+/), cwd);
       await sendMsg(chatId, `\`\`\`\n${out.slice(0, 3800)}\n\`\`\``);
     }
     return;
   }
-  // ── Direct shell ──
+  // ── Direct shell — owner DM only ──
   if (text.startsWith("/sh ")) {
+    if (String(msg.from?.id) !== OWNER_CHAT_ID) {
+      await tg("sendMessage", { chat_id: chatId, text: "⛔️ /sh is owner-only." });
+      return;
+    }
     const cmd = text.slice(4);
     const cwd = getGitCwd();
     try {
@@ -2112,7 +2128,7 @@ async function handleMessage(msg) {
       return;
     }
     const gitArg = arg || "HEAD";
-    const raw = gitExec(`git diff ${gitArg}`, cwd) || gitExec("git diff --cached", cwd) || "";
+    const raw = gitExecSafe(["diff", ...gitArg.split(/\s+/)], cwd) || gitExec("git diff --cached", cwd) || "";
     if (!raw.trim()) {
       await tg("sendMessage", { chat_id: chatId, text: "✅ No diff." });
       return;

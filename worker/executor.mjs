@@ -170,14 +170,7 @@ function spawnClaude(prompt, onEvent, { sessionId: resumeId, cwd, chatId = "defa
 export async function runClaude(prompt, onEvent, chatId = "default") {
   let { activeSessionId, activeCwd } = getActiveSession(chatId);
 
-  // If no active session for this chat, fall back to owner's DM session
-  if (!activeSessionId && _ownerChatId && chatId !== _ownerChatId) {
-    const ownerSession = getActiveSession(_ownerChatId);
-    if (ownerSession.activeSessionId) {
-      activeSessionId = ownerSession.activeSessionId;
-      activeCwd = ownerSession.activeCwd || activeCwd;
-    }
-  }
+  // No session fallback to owner DM — each chat gets its own isolated session
 
   const cwd = getCustomCwd() || activeCwd || DEFAULT_CWD;
 
