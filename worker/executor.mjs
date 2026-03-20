@@ -6,7 +6,7 @@ import { homedir } from "os";
 import { getActiveSession, getModel, getCustomCwd, clearActiveSession } from "./sessions.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-let _configTimeout = 1800000; // 30 min default
+let _configTimeout = 300000; // 5 min default
 let _ownerChatId = null;
 try {
   const cfg = JSON.parse(readFileSync(join(__dirname, "..", "config.json"), "utf-8"));
