@@ -206,8 +206,13 @@ function stripSystemTags(text) {
   return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
 }
 
+// Fix bare & that would break Telegram HTML parser (skip already-escaped ones)
+function fixAmpersands(text) {
+  return text.replace(/&(?!(?:amp|lt|gt|quot|apos);)/g, "&amp;");
+}
+
 async function sendMsg(chatId, text) {
-  const chunks = splitMarkdown(stripSystemTags(text));
+  const chunks = splitMarkdown(fixAmpersands(stripSystemTags(text)));
   let sent = 0;
   for (const chunk of chunks) {
     if (!chunk.trim()) continue;
@@ -217,7 +222,9 @@ async function sendMsg(chatId, text) {
       parse_mode: "HTML",
     });
     if (!res.ok) {
-      await tg("sendMessage", { chat_id: chatId, text: chunk });
+      // Strip HTML tags for fallback so they don't show as raw text
+      const plain = chunk.replace(/<[^>]*>/g, "");
+      await tg("sendMessage", { chat_id: chatId, text: plain });
     }
     sent++;
   }
