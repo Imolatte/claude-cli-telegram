@@ -785,6 +785,7 @@ async function handleCallback(cb) {
       await tg("editMessageText", { chat_id: chatId, message_id: cb.message.message_id, text: t("sleep.going") });
       setTimeout(doSleep, 1500);
     } else {
+      lastTelegramActivityAt = Date.now(); // reset idle timer so we don't ask again for another 30 min
       await tg("answerCallbackQuery", { callback_query_id: cb.id, text: t("sleep.continue") });
       await tg("editMessageText", { chat_id: chatId, message_id: cb.message.message_id, text: t("sleep.continuing") });
     }
