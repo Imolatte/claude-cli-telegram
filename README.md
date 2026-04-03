@@ -1,11 +1,11 @@
-# Claude Code ↔ Telegram
+# Claude CLI ↔ Telegram
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-20%2B-green.svg)](https://nodejs.org)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-CLI-blueviolet.svg)](https://claude.ai/claude-code)
-![GitHub stars](https://img.shields.io/github/stars/Imolatte/tg-claude?style=flat-square)
-![GitHub last commit](https://img.shields.io/github/last-commit/Imolatte/tg-claude?style=flat-square)
-![GitHub issues](https://img.shields.io/github/issues/Imolatte/tg-claude?style=flat-square)
+![GitHub stars](https://img.shields.io/github/stars/Imolatte/claude-cli-telegram?style=flat-square)
+![GitHub last commit](https://img.shields.io/github/last-commit/Imolatte/claude-cli-telegram?style=flat-square)
+![GitHub issues](https://img.shields.io/github/issues/Imolatte/claude-cli-telegram?style=flat-square)
 
 **Turn your Mac or Linux machine into a remote Claude Code terminal — controlled from your phone via Telegram.**
 
@@ -27,9 +27,9 @@ You (Telegram) → Bot (Node.js) → Claude Code CLI → tools → response → 
 
 Anthropic's [official Telegram plugin](https://github.com/anthropics/claude-plugins-official/tree/main/external_plugins/telegram) is a minimal MCP bridge — 3 tools, no history, no session management.
 
-**Claude Code ↔ Telegram** is a full remote terminal: sessions, streaming progress, approval system for dangerous ops, git panel, voice input, file/photo handling, Mac remote control, and 30+ commands - all from your phone.
+**Claude CLI ↔ Telegram** is a full remote terminal: sessions, streaming progress, approval system for dangerous ops, git panel, voice input, file/photo handling, Mac remote control, and 30+ commands - all from your phone.
 
-| | Official Plugin | Claude Code ↔ Telegram |
+| | Official Plugin | Claude CLI ↔ Telegram |
 |---|---|---|
 | Architecture | MCP bridge | Full bot wrapper around CLI |
 | Session management | None | Auto-resume, rotate, switch, rename |
@@ -43,7 +43,7 @@ Anthropic's [official Telegram plugin](https://github.com/anthropics/claude-plug
 ## Quick Start
 
 ```bash
-git clone https://github.com/Imolatte/tg-claude.git
+git clone https://github.com/Imolatte/claude-cli-telegram.git
 cd tg-claude && cp config.example.json config.json
 # Edit config.json — add bot token, chat ID, Groq API key
 cd worker && npm install && node index.mjs
@@ -189,7 +189,7 @@ Add the bot to any Telegram group:
 ### Install
 
 ```bash
-git clone https://github.com/Imolatte/tg-claude.git
+git clone https://github.com/Imolatte/claude-cli-telegram.git
 cd tg-claude/worker && npm install
 cp ../config.example.json ../config.json
 ```
