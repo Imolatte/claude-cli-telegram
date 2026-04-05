@@ -168,6 +168,10 @@ const locales = {
     "approval.no_btn": "❌ No",
     "approval.cancel_btn": "❌ Cancel",
     "approval.pending_terminal": "⚠️ Approval waiting in terminal for {min} min:\n<b>{tool}</b>\n<code>{detail}</code>",
+    "approval.already_answered": "Already answered",
+    "approval.takeover_ok": "Session taken over",
+    "approval.takeover_resuming": "Resuming session",
+    "approval.takeover_continue": "Continue the task. The previous terminal session was taken over.",
 
     // ── Notify hook ──
     "hook.task_done": "Task completed",
@@ -381,6 +385,10 @@ const locales = {
     "approval.no_btn": "❌ Нет",
     "approval.cancel_btn": "❌ Отмена",
     "approval.pending_terminal": "⚠️ Approval ждёт в терминале уже {min} мин:\n<b>{tool}</b>\n<code>{detail}</code>",
+    "approval.already_answered": "Уже отвечено",
+    "approval.takeover_ok": "Сессия перехвачена",
+    "approval.takeover_resuming": "Возобновляю сессию",
+    "approval.takeover_continue": "Продолжай задачу. Терминальная сессия была перехвачена.",
 
     // ── Notify hook ──
     "hook.task_done": "Задача завершена",
