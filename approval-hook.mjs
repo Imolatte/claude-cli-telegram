@@ -1,19 +1,18 @@
 #!/usr/bin/env node
 
 /**
- * Claude Code PreToolUse Hook — Dual-Channel Approval
+ * Claude Code PreToolUse Hook — Approval
  *
- * CLAUDE_SOURCE=telegram → approval via Telegram inline buttons
- * hybrid mode             → approval via Telegram inline buttons
- * terminal mode           → no decision (Claude Code's built-in prompt handles it)
- * Safe ops                → auto-approve always
+ * Terminal mode  → exits with no decision (Claude Code's built-in prompt)
+ *                  writes marker file for worker to detect unanswered prompts
+ * Telegram mode  → approval via Telegram inline buttons (blocks until answered)
+ * Safe ops       → auto-approve always
  *
  * In terminal mode, also sends typing/working indicators to Telegram
  * so the user knows Claude is active even when away from the desk.
  */
 
 import { readFileSync, writeFileSync, unlinkSync, existsSync } from "fs";
-import { execSync } from "child_process";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { t, loadLang, getLang } from "./worker/locale.mjs";
@@ -26,24 +25,10 @@ const config = JSON.parse(readFileSync(join(__dirname, "config.json"), "utf-8"))
 const BOT_TOKEN = config.botToken;
 const CHAT_ID = config.chatId;
 const TIMEOUT_MS = parseInt(config.timeoutMs || "0", 10);
-const MODE_FILE = "/tmp/claude-output-channel";
 const PID_FILE = "/tmp/claude-tg-worker.pid";
 const TYPING_TS_FILE = "/tmp/claude-tg-typing-ts";
 const WORKING_NOTIFIED_FILE = "/tmp/claude-tg-working-notified";
 const REQUEST_META_FILE = "/tmp/claude-request-meta.json";
-
-// Mode: "terminal" | "hybrid" | "telegram"
-// CLAUDE_SOURCE=telegram → bot spawned this, always approve via TG
-// No CLAUDE_SOURCE → user is in terminal, always use Claude's built-in prompt
-function getMode() {
-  if (process.env.CLAUDE_SOURCE === "telegram") return "telegram";
-  return "terminal";
-}
-
-function useTgApproval() {
-  const mode = getMode();
-  return mode === "hybrid" || mode === "telegram";
-}
 
 const AUTO_ALLOW = JSON.stringify({
   hookSpecificOutput: {
@@ -299,7 +284,7 @@ async function main() {
   const toolName = input.tool_name || "";
   const toolInput = input.tool_input || {};
 
-  // Clean up pending approval marker — if we're here, previous approval was answered
+  // Clean up pending approval marker - if we're here, previous approval was answered in terminal
   try { unlinkSync("/tmp/claude-tg-pending-approval"); } catch {}
 
   // For terminal Claude: send activity indicators to TG so user knows work is happening
@@ -341,30 +326,22 @@ async function main() {
     } catch {}
   }
 
-  // Terminal mode → Claude Code shows its prompt (1/2/3)
-  // If unanswered for 5 min → worker sends TG buttons → user approves from phone
-  // → worker writes keystroke to terminal TTY → prompt resolves
-  if (!useTgApproval()) {
+  // Terminal mode → write marker file and exit (Claude Code shows its own prompt)
+  // Worker watches for unanswered markers and offers session takeover after 5 min
+  if (process.env.CLAUDE_SOURCE !== "telegram") {
     const detail = getDetail(toolName, toolInput);
     const opId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    // Discover terminal TTY for remote approval
-    let ttyPath = null;
-    try {
-      const ttyRaw = execSync(`ps -p ${process.ppid} -o tty= 2>/dev/null`).toString().trim();
-      if (ttyRaw && ttyRaw !== "??") ttyPath = `/dev/tty${ttyRaw}`;
-    } catch {}
-
-    // Write marker file — worker watches it and sends TG buttons after 5 min
     writeFileSync("/tmp/claude-tg-pending-approval", JSON.stringify({
-      toolName, detail: detail.slice(0, 300), ts: Date.now(), opId, ttyPath,
+      toolName, detail: detail.slice(0, 300), ts: Date.now(), opId,
+      claudePid: process.ppid,
     }));
 
     // Exit with no decision → terminal prompt shows as usual
     process.exit(0);
   }
 
-  // Telegram/hybrid mode → block and wait for TG buttons (existing flow)
+  // Telegram mode → block and wait for TG buttons
   const detail = getDetail(toolName, toolInput);
   const description = toolInput.description || "";
   const approved = await requestTelegramApproval(toolName, detail, description);

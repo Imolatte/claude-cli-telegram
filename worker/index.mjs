@@ -756,30 +756,9 @@ async function handleCallback(cb) {
     const opId = parts[1];
     const decision = parts[2]; // "allow" or "deny"
 
-    // Check if this is a terminal approval (has pending marker with TTY)
-    let isTerminalApproval = false;
-    const markerPath = "/tmp/claude-tg-pending-approval";
-    try {
-      if (existsSync(markerPath)) {
-        const marker = JSON.parse(readFileSync(markerPath, "utf-8"));
-        if (marker.opId === opId && marker.ttyPath) {
-          isTerminalApproval = true;
-          // Write keystroke to terminal TTY - resolves Claude Code's permission prompt
-          // Claude Code shows: 1. Allow once  2. Allow always  3. Deny
-          const key = decision === "allow" ? "1" : "3";
-          writeFileSync(marker.ttyPath, key + "\n");
-          try { unlinkSync(markerPath); } catch {}
-        }
-      }
-    } catch (e) {
-      // TTY write failed - fall back to result file
-    }
-
-    // For TG sessions (hook is blocking and polling): write result file
-    if (!isTerminalApproval) {
-      const resultFile = join("/tmp", `claude-approval-${opId}.result`);
-      writeFileSync(resultFile, JSON.stringify({ decision }));
-    }
+    // Write result file — hook (both terminal and TG mode) polls for this
+    const resultFile = join("/tmp", `claude-approval-${opId}.result`);
+    writeFileSync(resultFile, JSON.stringify({ decision }));
 
     const emoji = decision === "allow" ? "✅" : "❌";
     const status = decision === "allow" ? t("approval.approved") : t("approval.denied");
@@ -794,6 +773,67 @@ async function handleCallback(cb) {
       text: `${origText}\n\n${emoji} <b>${status}</b>`,
       parse_mode: "HTML",
     });
+    return;
+  }
+
+  // ── Session takeover from terminal ──
+  if (data.startsWith("takeover:")) {
+    const markerPath = "/tmp/claude-tg-pending-approval";
+
+    try {
+      if (!existsSync(markerPath)) {
+        await tg("answerCallbackQuery", { callback_query_id: cb.id, text: t("approval.already_answered") });
+        return;
+      }
+
+      const marker = JSON.parse(readFileSync(markerPath, "utf-8"));
+
+      // Kill the terminal Claude process and wait for it to flush session
+      if (marker.claudePid) {
+        try { process.kill(marker.claudePid, "SIGINT"); } catch {}
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+
+      // Find the most recent session (the one terminal Claude was using)
+      const { items } = listSessions(1);
+      if (items.length === 0) {
+        await tg("answerCallbackQuery", { callback_query_id: cb.id, text: "No session found" });
+        try { unlinkSync(markerPath); } catch {}
+        return;
+      }
+
+      const session = items[0];
+      const cwd = getWorkingDir(session.projectDir);
+      setActiveSession(session.sessionId, session.projectDir, cwd, String(OWNER_CHAT_ID));
+
+      try { unlinkSync(markerPath); } catch {}
+
+      await tg("answerCallbackQuery", { callback_query_id: cb.id, text: `📱 ${t("approval.takeover_ok")}` });
+
+      // Update notification message
+      const origText = cb.message?.text || "";
+      await tg("editMessageText", {
+        chat_id: chatId,
+        message_id: cb.message.message_id,
+        text: `${origText}\n\n📱 <b>${t("approval.takeover_ok")}</b>`,
+        parse_mode: "HTML",
+      });
+
+      // Resume session in TG mode - Claude will re-encounter the dangerous op
+      // and this time CLAUDE_SOURCE=telegram → hook shows TG approval buttons
+      const title = session.displayName || session.projectName;
+      await tg("sendMessage", {
+        chat_id: OWNER_CHAT_ID,
+        text: `📱 <b>${t("approval.takeover_resuming")}</b>\n<code>${esc(title)}</code>`,
+        parse_mode: "HTML",
+        disable_notification: true,
+      });
+
+      enqueue(String(OWNER_CHAT_ID), t("approval.takeover_continue"), {});
+    } catch (e) {
+      console.error("Takeover error:", e.message);
+      await tg("answerCallbackQuery", { callback_query_id: cb.id, text: `Error: ${e.message}` });
+    }
     return;
   }
 
@@ -2467,12 +2507,11 @@ function startAutoSleepWatcher() {
   }, INTERVAL_MS);
 }
 
-// ── Pending approval → TG buttons after 5 min ──────────────────────
-// If terminal approval is unanswered for 5 min, send TG buttons.
-// When user taps a button, worker writes keystroke to terminal TTY.
+// ── Pending approval watcher ─────────────────────────────────────────
+// Terminal approval unanswered for 5 min → send TG notification with takeover button
 
 const PENDING_APPROVAL_FILE = "/tmp/claude-tg-pending-approval";
-const APPROVAL_WAIT_MS = 5 * 60 * 1000; // 5 min before sending TG buttons
+const APPROVAL_WAIT_MS = 5 * 60 * 1000;
 
 function startApprovalWatcher() {
   setInterval(() => {
@@ -2481,40 +2520,43 @@ function startApprovalWatcher() {
       const data = JSON.parse(readFileSync(PENDING_APPROVAL_FILE, "utf-8"));
       const age = Date.now() - data.ts;
 
-      // Not yet time to notify
       if (age < APPROVAL_WAIT_MS) return;
 
-      // Already sent buttons (marker has .notified flag)
       if (data.notified) {
-        // Clean up stale markers older than 10 min (terminal probably answered)
-        if (age > 10 * 60 * 1000) unlinkSync(PENDING_APPROVAL_FILE);
+        // Clean up stale markers older than 15 min
+        if (age > 15 * 60 * 1000) unlinkSync(PENDING_APPROVAL_FILE);
         return;
       }
 
-      // Send TG buttons
       const mins = Math.round(age / 60000);
+      const lang = getLang();
+      const waitText = lang === "ru"
+        ? `Ожидает ответа в терминале ${mins} мин`
+        : `Waiting for terminal response ${mins} min`;
+      const takeoverBtn = lang === "ru" ? "📱 Перехватить сессию" : "📱 Take over session";
+
       tg("sendMessage", {
         chat_id: OWNER_CHAT_ID,
         text: [
-          `⚠️ <b>${t("approval.dangerous_op")}</b> (${mins} min)`,
+          `⚠️ <b>${t("approval.dangerous_op")}</b>`,
           ``,
           `<b>${t("approval.what")}</b> ${esc(data.toolName)}`,
           `<code>${esc(data.detail)}</code>`,
+          ``,
+          `⏰ <i>${waitText}</i>`,
         ].join("\n"),
         parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [[
-            { text: t("approval.yes_btn"), callback_data: `op:${data.opId}:allow` },
-            { text: t("approval.no_btn"), callback_data: `op:${data.opId}:deny` },
+            { text: takeoverBtn, callback_data: `takeover:${data.opId}` },
           ]],
         },
       }).catch(() => {});
 
-      // Mark as notified so we don't send again
       data.notified = true;
       writeFileSync(PENDING_APPROVAL_FILE, JSON.stringify(data));
     } catch {}
-  }, 30_000); // check every 30s
+  }, 30_000);
 }
 
 init().then(() => {
