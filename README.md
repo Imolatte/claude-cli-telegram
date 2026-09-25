@@ -122,6 +122,7 @@ Switch with `/mode` in Telegram or `node mode.mjs <mode>` in terminal.
 | `/setup` | Re-run first-time setup wizard |
 | `/stop` | Kill running Claude process |
 | `/plan` | Toggle Plan / Build mode |
+| `/where` | Run Claude on the Mac or on the server (see [Mac and server](#mac-and-server)) |
 
 ### Sessions
 | Command | Description |
@@ -250,6 +251,78 @@ Create `~/Library/LaunchAgents/com.tg-claude.worker.plist` pointing to `node ind
 
 Logs: `/tmp/tg-claude.log`
 
+## Mac and server
+
+The bot can run Claude in two places: on your Mac and on a Linux server. There are two ways to set that up.
+
+| Mode | Where the bot runs | When to pick it |
+| --- | --- | --- |
+| **Mac only** (`role: "solo"`, the default) | on the Mac | You only work from one machine and don't mind the bot going quiet while the Mac sleeps. |
+| **Server first, Mac as standby** (recommended) | on the server, with the Mac taking over when needed | You want the bot to answer at 3 a.m. with the laptop closed, and still be able to run things on the Mac when you choose to. |
+
+### How server-first works
+
+- The server worker (`role: "primary"`) holds the bot by default and runs Claude right there.
+- The Mac worker (`role: "standby"`) checks the server over ssh every 20 seconds. It takes the bot in two cases: the server has not answered three checks in a row, or you switched to the Mac with `/where mac`.
+- `/where mac` hands the bot to the Mac within about 20 seconds. `/where server` hands it back.
+- If you pick the Mac and then close the lid, the server notices the missing heartbeat after 90 seconds and takes the bot back, so it never goes silent.
+- Telegram allows one poller per bot token. Every hand-over is explicit, and the two workers never fight over updates.
+- Context lives where the CLI runs: the Mac and the server keep separate sessions.
+- Hand-overs are written to the logs only and never show up in the chat.
+
+### Server setup
+
+On the server, as a regular user rather than root (Claude refuses `--dangerously-skip-permissions` under root):
+
+```bash
+git clone https://github.com/Imolatte/claude-cli-telegram.git ~/tg-claude
+cd ~/tg-claude/worker && npm install
+cp ../config.example.json ../config.json
+echo server > target
+```
+
+Its `config.json`, in addition to the bot token and chat id:
+
+```json
+{
+  "role": "primary",
+  "serverPrompt": "/home/you/.bot-system-prompt.md",
+  "serverMcpConfig": "/home/you/.mcp.json"
+}
+```
+
+Both paths are optional. They give the server Claude its own system prompt and MCP servers. Run it as a service. A minimal systemd unit:
+
+```ini
+[Service]
+User=you
+WorkingDirectory=/home/you/tg-claude/worker
+EnvironmentFile=/home/you/.claude-token.env   # CLAUDE_CODE_OAUTH_TOKEN=... (no "export")
+ExecStart=/usr/bin/node /home/you/tg-claude/worker/index.mjs
+Restart=always
+```
+
+Get the token with `claude setup-token` on any machine where you're logged in.
+
+### Mac setup
+
+On the Mac, in `config.json`:
+
+```json
+{
+  "role": "standby",
+  "primaryHost": "you@your-server",
+  "primaryUnit": "tg-claude",
+  "primaryTargetFile": "/home/you/tg-claude/worker/target"
+}
+```
+
+The Mac needs passwordless ssh to `primaryHost`, since it runs `ssh -o BatchMode=yes`. `primaryUnit` is the systemd unit to check. Restart the Mac worker, and `/where` then shows where Claude runs right now.
+
+### Mac only, with an occasional server run
+
+Keep `role: "solo"` and add `serverHost` (and optionally `serverClaude`, `serverPrompt`, `serverMcpConfig`). Then `/where server` runs Claude on the server over ssh for as long as the Mac is awake.
+
 ## Architecture
 
 ```
@@ -296,4 +369,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
-[MIT](LICENSE) — Imolatte
+[MIT](LICENSE)

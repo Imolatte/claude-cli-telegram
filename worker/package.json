@@ -20,7 +20,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Imolatte/tg-claude.git"
+    "url": "https://github.com/Imolatte/claude-cli-telegram.git"
   },
   "engines": {
     "node": ">=20.0.0"

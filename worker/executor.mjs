@@ -3,7 +3,8 @@ import { readFileSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
-import { getActiveSession, getModel, getCustomCwd, clearActiveSession } from "./sessions.mjs";
+import { getActiveSession, getModel, getCustomCwd, clearActiveSession, getTarget } from "./sessions.mjs";
+import { ROLE } from "./role.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let _configTimeout = 300000; // 5 min default
@@ -14,6 +15,18 @@ try {
   if (cfg.chatId) _ownerChatId = String(cfg.chatId);
 } catch {}
 const CLAUDE_TIMEOUT = parseInt(process.env.CLAUDE_TIMEOUT || String(_configTimeout), 10);
+// The "server" target: the same CLI on a Linux box. Everything about that box comes from
+// config.json - see README, "Mac and server". Paths are as seen on the server.
+let _server = {};
+try { _server = JSON.parse(readFileSync(join(__dirname, "..", "config.json"), "utf-8")); } catch {}
+const _serverHost = _server.serverHost || "";
+const _serverClaude = _server.serverClaude || "claude";
+const _serverPrompt = _server.serverPrompt || "";
+const _serverMcpConfig = _server.serverMcpConfig || "";
+const shQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+// A mac path means nothing on the server: the session's cwd is per-machine, so anything that
+// is not a server path falls back to the home directory there.
+const remoteCd = (cwd) => (cwd && !cwd.startsWith("/Users") && cwd.startsWith("/") ? `cd ${shQuote(cwd)}` : "cd");
 const DEFAULT_CWD = process.env.DEFAULT_CWD || homedir();
 
 // Find claude binary via PATH
@@ -25,6 +38,12 @@ function findClaude() {
 const CLAUDE_BIN = findClaude();
 
 const SYSTEM_PROMPT_FILE = join(__dirname, "..", "bot-system-prompt.md");
+const SYSTEM_PROMPT_DIR = join(__dirname, "..");
+
+// Per-chat default working directory (for guest accounts with isolated workspaces)
+const GUEST_CWDS = {
+  "738387207": join(homedir(), "develop", "yana-lawyer"), // Yana — legal assistant
+};
 const MCP_TELEGRAM_PATH = join(__dirname, "mcp-telegram.mjs");
 const MCP_CONFIG_FILE = join(__dirname, "..", "mcp-config.json");
 
@@ -51,30 +70,72 @@ function spawnClaude(prompt, onEvent, { sessionId: resumeId, cwd, chatId = "defa
   return new Promise((resolve) => {
     const model = getModel();
 
+    // Per-chat system prompt: bot-system-prompt.<chatId>.md, fallback to default
     let systemPrompt;
-    try { systemPrompt = readFileSync(SYSTEM_PROMPT_FILE, "utf-8").trim(); } catch {}
+    try {
+      const perChatFile = join(SYSTEM_PROMPT_DIR, `bot-system-prompt.${chatId}.md`);
+      systemPrompt = readFileSync(perChatFile, "utf-8").trim();
+    } catch {
+      try { systemPrompt = readFileSync(SYSTEM_PROMPT_FILE, "utf-8").trim(); } catch {}
+    }
 
+    const isOwner = chatId === _ownerChatId;
+
+    const toServer = getTarget() === "server";
     const args = [
       "--print",
       "--output-format", "stream-json",
       "--verbose",
-      "--dangerously-skip-permissions",
       "--model", model,
-      "--mcp-config", MCP_CONFIG_FILE,
       "--disable-slash-commands",
     ];
+    args.push("--dangerously-skip-permissions");
+    if (!toServer) args.push("--mcp-config", MCP_CONFIG_FILE);
 
-    if (systemPrompt) args.push("--append-system-prompt", systemPrompt);
+    // Guests can't run shell - too dangerous
+    if (!isOwner) args.push("--disallowedTools", "Bash");
+
+    // The server gets its own MCP servers and prompt instead of the mac's telegram bridge.
+    if (toServer) {
+      if (_serverMcpConfig) args.push("--mcp-config", _serverMcpConfig);
+      if (_serverPrompt) args.push("--append-system-prompt-file", _serverPrompt);
+    } else if (systemPrompt) args.push("--append-system-prompt", systemPrompt);
     if (resumeId) args.push("--resume", resumeId);
-    args.push(prompt);
+    // On the box itself the server target is local; only a mac worker reaches it over ssh.
+    const remote = toServer && ROLE !== "primary";
+    if (!remote) args.push(prompt);
+    if (remote && !_serverHost) {
+      resolve({ success: false, output: "serverHost is not set in config.json - see README, \"Mac and server\".", exitCode: -1 });
+      return;
+    }
+    const child = remote
+      ? spawn(
+          "ssh",
+          [
+            "-o", "BatchMode=yes",
+            "-o", "ServerAliveInterval=20",
+            "-o", "StrictHostKeyChecking=accept-new",
+            _serverHost,
+            `[ -f ~/.claude-token.env ] && . ~/.claude-token.env; ${remoteCd(cwd)} && exec ${shQuote(_serverClaude)} ${args.map(shQuote).join(" ")}`,
+          ],
+          {
+            stdio: ["pipe", "pipe", "pipe"],
+            timeout: CLAUDE_TIMEOUT,
+            detached: true,
+            env: { ...process.env, CLAUDE_SOURCE: "telegram" },
+          },
+        )
+      : spawn(CLAUDE_BIN, args, {
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: CLAUDE_TIMEOUT,
+          detached: true,
+          ...(cwd && { cwd }),
+          env: { ...process.env, CLAUDE_SOURCE: "telegram", CLAUDECODE: "" },
+        });
 
-    const child = spawn(CLAUDE_BIN, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: CLAUDE_TIMEOUT,
-      detached: true,
-      ...(cwd && { cwd }),
-      env: { ...process.env, CLAUDE_SOURCE: "telegram", CLAUDECODE: "" },
-    });
+    if (remote) {
+      child.stdin.end(prompt);
+    }
 
     activeChildren.set(chatId, child);
 
@@ -172,7 +233,7 @@ export async function runClaude(prompt, onEvent, chatId = "default") {
 
   // No session fallback to owner DM — each chat gets its own isolated session
 
-  const cwd = getCustomCwd() || activeCwd || DEFAULT_CWD;
+  const cwd = getCustomCwd() || activeCwd || GUEST_CWDS[chatId] || DEFAULT_CWD;
 
   console.log(`🚀 runClaude chat=${chatId} session=${activeSessionId?.slice(0,8) || "none"} cwd=${cwd} prompt=${prompt.slice(0,60)}`);
   const result = await spawnClaude(prompt, onEvent, { sessionId: activeSessionId, cwd, chatId });

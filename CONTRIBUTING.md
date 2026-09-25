@@ -5,7 +5,7 @@ Thanks for your interest! Here's how to get started.
 ## Development Setup
 
 ```bash
-git clone https://github.com/Imolatte/tg-claude.git
+git clone https://github.com/Imolatte/claude-cli-telegram.git
 cd tg-claude/worker && npm install
 cp ../config.example.json ../config.json
 # Fill in your bot token, chat ID, and Groq API key
@@ -60,4 +60,4 @@ mode.mjs               CLI tool for switching output modes
 
 ## Reporting Bugs
 
-Use [GitHub Issues](https://github.com/Imolatte/tg-claude/issues) with the bug report template.
+Use [GitHub Issues](https://github.com/Imolatte/claude-cli-telegram/issues) with the bug report template.

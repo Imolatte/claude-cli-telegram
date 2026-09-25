@@ -25,6 +25,7 @@ await new Promise((resolve, reject) => {
 
 const HOME = homedir();
 import { runClaude, killActiveChild } from "./executor.mjs";
+import { ROLE, shouldPoll, startRole } from "./role.mjs";
 import { transcribeVoice, getVoiceLang, setVoiceLang } from "./voice.mjs";
 import {
   listSessions, setActiveSession, clearActiveSession, getActiveSession,
@@ -36,7 +37,11 @@ import {
   getTokenRotationLimit, setTokenRotationLimit, isSetupDone, markSetupDone,
   getOs, setOs,
   getAllowedUsers, addAllowedUser, removeAllowedUser,
+  setPendingCleanup, hasPendingCleanup, clearPendingCleanup,
 
+  getTarget,
+  setTarget,
+  VALID_TARGETS,
 } from "./sessions.mjs";
 import { t, getLang, setLang, loadLang, availableLangs } from "./locale.mjs";
 
@@ -70,7 +75,7 @@ let pendingSessionName = null;
 let planMode = false; // false = build (default), true = plan only
 const pendingGroupNaming = new Map(); // chatId → { prompt, meta } — waiting for session name in group
 const pendingNewNaming = new Set(); // chatId — waiting for session name after "New session" button
-const pendingCleanupDays = new Set(); // chatId — waiting for "how many days" input for sessions cleanup
+// pendingCleanupDays persisted in state.json via setPendingCleanup/hasPendingCleanup/clearPendingCleanup
 const cronJobs = []; // [{label, fireAt, timer}]
 const pendingDMText = {}; // chatId → { prompt, timer } — buffer text to combine with following forward
 const pendingPhotos = {}; // chatId → { paths: [], caption, timer, meta } — buffer photos arriving together
@@ -661,7 +666,7 @@ async function handleCallback(cb) {
   }
 
   if (data === "ses:cleanup") {
-    pendingCleanupDays.add(chatId);
+    setPendingCleanup(chatId);
     await tg("answerCallbackQuery", { callback_query_id: cb.id });
     await tg("sendMessage", {
       chat_id: chatId,
@@ -730,6 +735,20 @@ async function handleCallback(cb) {
       chat_id: chatId,
       message_id: cb.message.message_id,
       text: t("cmd.mode_set", { mode: esc(VALID_MODES[mode]) }),
+      parse_mode: "HTML",
+    });
+    return;
+  }
+
+  if (data.startsWith("where:")) {
+    const target = data.split(":")[1];
+    const label = { mac: "🖥 мак", server: "☁️ сервер (OVH)" };
+    const isSet = setTarget(target);
+    await tg("answerCallbackQuery", { callback_query_id: cb.id, text: isSet ? `✅ ${label[target] || target}` : "❌" });
+    await tg("editMessageText", {
+      chat_id: chatId,
+      message_id: cb.message.message_id,
+      text: isSet ? whereReply(target) : WHERE_UNREACHABLE,
       parse_mode: "HTML",
     });
     return;
@@ -1640,8 +1659,9 @@ async function handleMessage(msg) {
     // In groups: block slash commands for non-owners
     if (rawText.startsWith("/") && !isOwnerCmd) return;
   } else {
-    // In DM: owner only
-    if (chatId !== OWNER_CHAT_ID) return;
+    // In DM: owner or explicitly allowed users
+    const senderId = String(msg.from?.id || "");
+    if (chatId !== OWNER_CHAT_ID && !getAllowedUsers().includes(senderId)) return;
   }
 
   // Build request meta for approval-hook and display mode
@@ -1819,6 +1839,19 @@ async function handleMessage(msg) {
     text = text.replace(new RegExp(`@${botUsername}\\b`, "gi"), "").trim();
   }
 
+  // Guest accounts (non-owner allowed users) get a stripped-down chat-only experience.
+  // No /sessions, /git, /mode, setup wizards, etc. - just plain conversation.
+  const isGuest = chatId !== OWNER_CHAT_ID && !isGroupChat(msg);
+  if (isGuest && text.startsWith("/")) {
+    if (text === "/start") {
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: "Привет, Яна! Я твой юридический ассистент. Просто напиши вопрос или пришли документ - я помогу разобраться.",
+      });
+    }
+    return; // silently drop all other slash commands for guests
+  }
+
   // Commands
   if (text === "/start") { await showWelcome(chatId, msg.from?.language_code); return; }
   if (text === "/help") { await showHelp(chatId); return; }
@@ -1935,6 +1968,35 @@ async function handleMessage(msg) {
     }
     return;
   }
+  if (text.startsWith("/where")) {
+    const arg = text.slice(6).trim().toLowerCase();
+    const label = { mac: "🖥 мак", server: "☁️ сервер (OVH)" };
+    if (!arg) {
+      await tg("sendMessage", {
+        chat_id: chatId,
+        text: `Сейчас исполняю на: <b>${label[getTarget()]}</b>\n\nКонтекст живёт там, где запускается CLI - у мака и сервера <i>разные сессии</i>.`,
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [VALID_TARGETS.map((target) => ({
+            text: `${getTarget() === target ? "▶️ " : ""}${label[target]}`,
+            callback_data: `where:${target}`,
+          }))],
+        },
+      });
+      return;
+    }
+    if (!VALID_TARGETS.includes(arg)) {
+      await tg("sendMessage", { chat_id: chatId, text: `Не знаю такой цели. Есть: ${VALID_TARGETS.join(", ")}` });
+      return;
+    }
+    const isSet = setTarget(arg);
+    await tg("sendMessage", {
+      chat_id: chatId,
+      text: isSet ? whereReply(arg) : WHERE_UNREACHABLE,
+      parse_mode: "HTML",
+    });
+    return;
+  }
   if (text === "/status") {
     const { input, output } = getTokens();
     const { activeSessionId, activeCwd } = getActiveSession(chatId);
@@ -1947,9 +2009,11 @@ async function handleMessage(msg) {
     const model = getModel();
     const CONTEXT_LIMIT = 200_000;
     const bar = tokenProgressBar(scopeTotal, CONTEXT_LIMIT);
+    // Which machine is running the CLI decides which context answers - show it first.
+    const targetLine = getTarget() === "server" ? "☁️ <b>сервер (OVH)</b>\n" : "🖥 <b>мак</b>\n";
     await tg("sendMessage", {
       chat_id: chatId,
-      text: t("status.cmd", {
+      text: targetLine + t("status.cmd", {
         model, mode,
         cwd: esc(cwd.replace(HOME, "~")),
         session: esc(sessionName),
@@ -2404,8 +2468,8 @@ async function handleMessage(msg) {
   if (planMode) finalPrompt = t("plan.prefix", { prompt: finalPrompt });
 
   // Cleanup flow: waiting for "how many days" input
-  if (pendingCleanupDays.has(chatId)) {
-    pendingCleanupDays.delete(chatId);
+  if (hasPendingCleanup(chatId)) {
+    clearPendingCleanup(chatId);
     const days = parseInt(finalPrompt.trim(), 10);
     if (!Number.isFinite(days) || days < 0) {
       await tg("sendMessage", { chat_id: chatId, text: t("sessions.cleanup_invalid") });
@@ -2488,13 +2552,29 @@ async function handleMessage(msg) {
 
 // ── Polling ─────────────────────────────────────────────────────────
 
+const WHERE_UNREACHABLE = "☁️ Сервер недоступен - остаюсь на маке.";
+function whereReply(target) {
+  const label = { mac: "🖥 мак", server: "☁️ сервер (OVH)" };
+  if (ROLE === "primary" && target === "mac") {
+    return "Передаю бота маку - подхватит за ~20 секунд. Если мак спит, через полторы минуты бот вернётся на сервер.";
+  }
+  if (ROLE === "standby" && target === "server") return "Передаю бота серверу - подхватит за несколько секунд.";
+  return `Исполняю на: <b>${label[target] || target}</b>`;
+}
+
 async function poll() {
   while (running) {
+    if (!shouldPoll()) {
+      await new Promise((r) => setTimeout(r, 3000));
+      continue;
+    }
     try {
       const res = await fetch(
         `https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${offset}&timeout=${POLL_TIMEOUT}&allowed_updates=["message","callback_query"]`
       );
       const data = await res.json();
+      // 409 means the other worker still holds getUpdates during a handover.
+      if (!data.ok) await new Promise((r) => setTimeout(r, 3000));
 
       if (data.ok && data.result.length > 0) {
         for (const update of data.result) {
@@ -2708,6 +2788,7 @@ function startApprovalWatcher() {
 }
 
 init().then(() => {
+  startRole();
   poll();
   startAutoSleepWatcher();
   startBatteryWatcher();

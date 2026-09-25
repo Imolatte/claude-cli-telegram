@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, readdirSync, statSync } from "fs";
+import { isPaired, pairedTarget, setPairedTarget } from "./role.mjs";
 import { join, dirname, basename } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
@@ -15,6 +16,27 @@ const isSkippedDir = (dir) => SKIP_DIRS.some((s) => dir.includes(s));
 // ── State ───────────────────────────────────────────────────────────
 
 const VALID_MODELS = ["sonnet", "opus", "haiku"];
+
+// Where the CLI runs. The context lives on the machine that runs it, so a target switch
+// is also a session switch - "mac" keeps the historic key so existing state still loads.
+export const VALID_TARGETS = ["mac", "server"];
+
+export function getTarget() {
+  if (isPaired()) return pairedTarget();
+  const state = getState();
+  return VALID_TARGETS.includes(state.target) ? state.target : "mac";
+}
+
+export function setTarget(target) {
+  if (!VALID_TARGETS.includes(target)) return false;
+  if (isPaired()) return setPairedTarget(target);
+  const state = getState();
+  state.target = target;
+  saveState(state);
+  return true;
+}
+
+const scopedKey = (chatId) => (getTarget() === "mac" ? chatId : `${chatId}@${getTarget()}`);
 
 function getState() {
   try { return JSON.parse(readFileSync(STATE_FILE, "utf-8")); }
@@ -45,7 +67,7 @@ function migrateState(state) {
 
 export function getActiveSession(chatId = "default") {
   const state = migrateState(getState());
-  const s = state.activeSessions?.[chatId] || {};
+  const s = state.activeSessions?.[scopedKey(chatId)] || {};
   return {
     activeSessionId: s.sessionId || null,
     activeProjectDir: s.projectDir || null,
@@ -56,13 +78,13 @@ export function getActiveSession(chatId = "default") {
 export function setActiveSession(sessionId, projectDir, cwd, chatId = "default") {
   const state = migrateState(getState());
   if (!state.activeSessions) state.activeSessions = {};
-  state.activeSessions[chatId] = { sessionId, projectDir: projectDir || null, cwd: cwd || null };
+  state.activeSessions[scopedKey(chatId)] = { sessionId, projectDir: projectDir || null, cwd: cwd || null };
   saveState(state);
 }
 
 export function clearActiveSession(chatId = "default") {
   const state = migrateState(getState());
-  if (state.activeSessions) delete state.activeSessions[chatId];
+  if (state.activeSessions) delete state.activeSessions[scopedKey(chatId)];
   saveState(state);
 }
 
@@ -186,7 +208,7 @@ export function setTokenRotationLimit(limit) {
 }
 
 export function getOs() {
-  return getState().os || "mac";
+  return getState().os || (process.platform === "darwin" ? "mac" : "linux");
 }
 
 export function setOs(os) {
@@ -202,6 +224,24 @@ export function isSetupDone() {
 export function markSetupDone() {
   const state = getState();
   state.setupDone = true;
+  saveState(state);
+}
+
+// Persistent pending cleanup state (survives bot restarts)
+export function setPendingCleanup(chatId) {
+  const state = getState();
+  if (!state.pendingCleanup) state.pendingCleanup = {};
+  state.pendingCleanup[chatId] = true;
+  saveState(state);
+}
+
+export function hasPendingCleanup(chatId) {
+  return !!(getState().pendingCleanup?.[chatId]);
+}
+
+export function clearPendingCleanup(chatId) {
+  const state = getState();
+  if (state.pendingCleanup) delete state.pendingCleanup[chatId];
   saveState(state);
 }
 
